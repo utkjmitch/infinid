@@ -1,0 +1,11 @@
+name: infinid
+version: "0.1.0"
+slug: infinid
+description: "Carrier Infinity ABCD bus daemon (read-only capture phase)"
+arch:
+  - aarch64
+startup: services
+boot: auto
+uart: true
+map:
+  - share:rw
