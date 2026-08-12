@@ -591,3 +591,69 @@ derived from polling 4202, not from alarm frames.
     verified 0x60/0x61 splitting on 4+4; Hunterhill has one controller and
     3 zones; per-zone byte mapping still needs local confirmation (the one
     `000319` observation matches).
+
+---
+
+## Hunterhill live verification — 2026-08-12 labeled session
+
+First registers verified against **this** bus, from a hand-labeled experiment
+session (setpoint steps, fan ladder, vacation preset) correlated with a ~496k
+frame capture. Full evidence chains:
+[experiments/2026-08-12-labeled-session.md](experiments/2026-08-12-labeled-session.md).
+Everything in this section supersedes the "unverified" banner above for the
+listed fields only.
+
+### Confirmed prior-art claims
+
+| Register (owner) | Field | Verified meaning | Scaling | Conf |
+|---|---|---|---|---|
+| `000605` (write 2001→5201) | [0..3] | commanded compressor stage | float32 BE, 1.0–5.0 (2.0→5.0→1.0 at labeled setpoint steps) | HIGH |
+| `00060E` (5201) | [0] | actual stage index | u8 0=off 1–5 | HIGH |
+| `000604` (5201) | [0..1]/[2..3] | target / actual compressor RPM | u16 BE | HIGH |
+| `000306` (3e01) | [1..2] | blower RPM | u16 BE | HIGH |
+| `000306` (3e01) | [3..4] | airflow CFM (echo of `000305` command) | u16 BE | HIGH |
+| `000316` (3e01) | [4..5] | airflow CFM | u16 BE | HIGH |
+| `000303` (5201) | [2..3] | suction pressure PSIG (closes superheat arithmetic: sat 41 °F + SH 16 = suction 57 °F ✓) | u16 BE /16 | HIGH |
+| `000304` (5201) | [7] | line voltage (244–245 V) | u8 volts | HIGH |
+| `000608` (5201) | [5..6] | drive frequency; RPM = 3 × raw (raw 1470 ↔ ~4400 RPM) | u16 BE | MED-HIGH |
+| `000608` (5201) | [2] | EEV position % (pegged 100 all session) | u8 | MED |
+| `000308`/`000319` (2001→6001 / 6001) | [0..7] | damper command / feedback, byte per zone, 0x00–0x0F; 0319 mirrors 0308 with ~10–15 s lag; absent slots 0xFF in 0319 | nibble-range u8 | HIGH |
+| `000302` (6001) | TLV | tag 01=present / 04=not installed, value u16/16 °F (all six absent here) | /16 °F | HIGH |
+| `000202` (f1f1) | — | hour, minute, **weekday** (CarBus reading right, wiki "HH MM SS" **wrong**) | — | HIGH |
+| `000203` (f1f1) | — | day, month, year−2000 | — | HIGH |
+| `00061F` (5201) | floats | superheat/subcool float family incl. the 0.039 constant | float32 BE | MED |
+
+### Refined / corrected prior art
+
+| Register (owner) | Correction | Conf |
+|---|---|---|
+| `000302` (5201) | **Not** flat (threshold, value) int16 pairs — it is the same 4-byte TLV as the ZC: `tag(01) id value(u16/16 °F)` × 6. ids: 0x11 OAT (89.7–91.4), 0x12 outdoor coil (95→102 at stage 5), 0x30 suction temp (56–58), 0x4A superheat ΔT (14–16), 0x4B unknown 79–81 °F, 0x45 discharge (153→167 at stage 5) | HIGH (0x4B LOW) |
+| `000625` (5201) | Old "byte1 = stage/speed %" hypothesis **dead**: [0..1] is one u16 BE power-like analog — ~2090 at stage 2, ramps to 4802 at stage 5, ~1040 at stage 1 (watts plausible) | field HIGH, units MED |
+| `000604` (5201) | [4..13] / [14..23] are two static 5-entry u16 stage-RPM tables: heat 1200/2600/3200/4140/5400, cool 1200/2180/2850/3700/4140 — this unit's ladder ≠ the sources' rated speeds | HIGH |
+| `000305` (write 2001→3e01) | Layout pinned: bytes[4..5] u16 BE commanded CFM (813→1476→558 across labels), byte11 = 0x78 constant | HIGH |
+| `000308`/`000319` zone bytes | Partial positions 0x04–0x0B used continuously for balancing (not just 00/0A/0F). **Hunterhill zone map: byte0 bedrooms, byte1 living_room, byte2 basement** | HIGH |
+| NACK codes | All 19,896 exceptions in this capture are code **0x0A** (3e01 refusing the ~1 s `000715` poll) — infinitude's "all exceptions are 0x04" does not hold here | HIGH |
+| `000316` (3e01) | [7..8] u16 is load-correlated but matches neither static-pressure nor elec-heat-CFM readings cleanly — conflict still open | LOW |
+
+### New decodes (no prior art)
+
+| Register | Layout | Conf |
+|---|---|---|
+| `00041F` (write 2001→2201/2301, 20 B) | **Zone config push to smart sensors**: [0] flags (bit7 = hold active; cleared by preset-resume), [5] fan mode 0=auto 1=low 2=med 3=high, [6] heat setpoint °F, [7] cool setpoint °F, [10]=0x04 const. This is **where setpoint changes land on the bus**; the wall-control's own zone's setpoints never appear on the bus at all | [5][7] HIGH, [0][6] MED |
+| `00041E` (2201/2301, 20 B) | **Zone status from smart sensors**: [5] fan echo, [6] mirrors 41F[6], [7] zone temp whole °F, [9..10] u16 BE zone temp ×16 (73.25 / 70.25 observed), [11] zone temp whole °F, [12] RH % | [9..10] HIGH, rest MED |
+| `000413` (3e01, 12 B) | Blower telemetry: [0..1] measured CFM, [2..3] RPM, [4..7] float32 static pressure in wc (0.32–0.66), [8..11] float32 blower power W (77–469) | CFM/RPM HIGH, floats MED |
+| `000602` (5201, 14 B) | Outdoor fan: [12..13] target RPM (900/500 by stage), [4..5] actual RPM (ramps); [0] bit6 toggles, unknown | MED |
+| `000406` (3e01) + `00060B` (5201) | Thermostat writes the identical `01 04 XX 00` payload to IDU **and** ODU; byte2 97–100, consistent with a °F loop-target (condensing-temp-like) | LOW-MED |
+| `000302` (3e01, 12 B) | IDU thermistor TLV (same format): id 0x14 present, 69.5–70.7 °F /16 — LAT candidate but never approached supply-air temps during stage 5; possibly cabinet-mounted | scaling HIGH, identity MED |
+| `00061F` (5201) | float32 at [30..33] = 357–489, tracks stage/head pressure (PSIG?) | MED-LOW |
+
+### Session behavioral findings
+
+- Setpoint chain latency: 41F write +13 s after touch, stage command +16 s,
+  damper command +21 s, damper feedback +37 s, airflow step +82 s.
+- Fan-mode selection (E3 ladder) changed **only** the 41F enum during active
+  cooling — commanded CFM never left the 558–576 band (fan mode acts as a
+  floor, not a direct blower command, at stage 1).
+- Vacation preset produced **zero** observable bus traffic in 102 s; only
+  artifact was the 41F hold-bit clear 12 s after resume. Vacation state is
+  wall-control-internal (no SAM active on this bus).
