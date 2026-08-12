@@ -1,7 +1,6 @@
-// bus/frame.go
-// Frame codec for the Carrier Infinity ABCD bus.
-// Ported from acd/infinitive (MIT) infinity/frame.go with exported types,
-// an inlined CRC-16/ARC, and no logging dependencies.
+// Package bus implements the Carrier Infinity ABCD bus frame codec and
+// stream decoder. Ported from acd/infinitive (MIT) infinity/frame.go with
+// exported types, an inlined CRC-16/ARC, and no logging dependencies.
 package bus
 
 import (
@@ -70,6 +69,7 @@ type Frame struct {
 	Src  uint16
 	Op   uint8
 	Data []byte
+	Raw  []byte // exact wire bytes as received, set by Decode; ignored by Encode
 }
 
 func (f Frame) String() string {
@@ -121,5 +121,6 @@ func (f *Frame) Decode(buf []byte) bool {
 	f.Src = binary.BigEndian.Uint16(buf[2:4])
 	f.Op = buf[7]
 	f.Data = append([]byte{}, buf[8:l]...)
+	f.Raw = append([]byte{}, buf...)
 	return true
 }

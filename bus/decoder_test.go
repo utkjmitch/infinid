@@ -67,6 +67,19 @@ func TestDecoderSplitsCleanStream(t *testing.T) {
 	}
 }
 
+// zeroReader models a serial driver idling: (0, nil) forever.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { return 0, nil }
+
+func TestDecoderStopsOnZeroReads(t *testing.T) {
+	d := NewDecoder(zeroReader{})
+	_, err := d.Next()
+	if err != io.ErrNoProgress {
+		t.Fatalf("Next on idle reader = %v, want io.ErrNoProgress", err)
+	}
+}
+
 func TestDecoderResyncsAfterGarbage(t *testing.T) {
 	frames := testFrames(t)
 	var stream bytes.Buffer

@@ -14,6 +14,7 @@ func rec(src, dst uint16, op uint8, data string) Record {
 		TS:  time.Date(2026, 8, 11, 21, 0, 0, 0, time.UTC),
 		Src: src, Dst: dst, Op: op,
 		Data: []byte(data),
+		Raw:  []byte(data),
 	}
 }
 
@@ -35,7 +36,7 @@ func TestRecorderWritesJSONL(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &m); err != nil {
 		t.Fatalf("line 0 not JSON: %v", err)
 	}
-	if m["src"] != "2001" || m["dst"] != "3e01" || m["op"] != "0b" || m["data"] != "000306" {
+	if m["src"] != "2001" || m["dst"] != "3e01" || m["op"] != "0b" || m["data"] != "000306" || m["raw"] != "000306" {
 		t.Fatalf("unexpected fields: %v", m)
 	}
 	if !strings.HasPrefix(m["ts"], "2026-08-11T21:00:00") {

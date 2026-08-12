@@ -46,6 +46,9 @@ func TestFrameRoundTrip(t *testing.T) {
 			if got.Dst != tc.f.Dst || got.Src != tc.f.Src || got.Op != tc.f.Op || !bytes.Equal(got.Data, tc.f.Data) {
 				t.Fatalf("round trip mismatch: got %+v want %+v", got, tc.f)
 			}
+			if !bytes.Equal(got.Raw, wire) {
+				t.Fatalf("Raw = %x, want %x", got.Raw, wire)
+			}
 		})
 	}
 }

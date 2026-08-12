@@ -1,5 +1,5 @@
 name: infinid
-version: "0.1.0"
+version: "0.1.1"
 slug: infinid
 description: "Carrier Infinity ABCD bus daemon (read-only capture phase)"
 arch:
