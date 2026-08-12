@@ -1,6 +1,6 @@
 # infinid Phase 1 (Foundation) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** A running daemon on the Pi that reads the Carrier ABCD bus through the USB RS-485 dongle, validates frames, logs them, and records them to a JSONL capture file — the fixture source for Phase 2's table decoders.
 
@@ -264,7 +264,7 @@ git commit -m "feat(bus): frame codec + CRC-16/ARC, golden fixtures from live ca
 - Create: `bus/decoder.go`
 - Test: `bus/decoder_test.go`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 // bus/decoder_test.go
@@ -354,12 +354,12 @@ func TestDecoderResyncsAfterGarbage(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./bus/`
 Expected: FAIL — `undefined: NewDecoder`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```go
 // bus/decoder.go
@@ -421,12 +421,12 @@ func (d *Decoder) Next() (Frame, error) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./bus/ -v`
 Expected: PASS (7 tests total).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bus/decoder.go bus/decoder_test.go
@@ -441,7 +441,7 @@ git commit -m "feat(bus): stream splitter with byte-wise resync"
 - Create: `bus/serial.go`
 - Modify: `go.mod` (adds go.bug.st/serial)
 
-- [ ] **Step 1: Write the implementation** (thin, hardware-backed — no unit test; exercised by the add-on smoke test in Task 6)
+- [x] **Step 1: Write the implementation** (thin, hardware-backed — no unit test; exercised by the add-on smoke test in Task 6)
 
 ```go
 // bus/serial.go
@@ -464,12 +464,12 @@ func OpenSerial(device string) (io.ReadWriteCloser, error) {
 }
 ```
 
-- [ ] **Step 2: Fetch the dependency and build**
+- [x] **Step 2: Fetch the dependency and build**
 
 Run: `go get go.bug.st/serial@latest && go build ./...`
 Expected: builds clean; `go.mod`/`go.sum` updated.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add bus/serial.go go.mod go.sum
@@ -484,7 +484,7 @@ git commit -m "feat(bus): serial open at Carrier bus parameters"
 - Create: `capture/recorder.go`
 - Test: `capture/recorder_test.go`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 // capture/recorder_test.go
@@ -548,12 +548,12 @@ func TestRingKeepsLastN(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./capture/`
 Expected: FAIL — `undefined: Record`, `undefined: New`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```go
 // capture/recorder.go
@@ -628,12 +628,12 @@ func (r *Recorder) Snapshot() []Record {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./capture/ -v`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add capture/recorder.go capture/recorder_test.go
@@ -647,7 +647,7 @@ git commit -m "feat(capture): frame ring buffer + JSONL recorder"
 **Files:**
 - Create: `cmd/infinid/main.go`
 
-- [ ] **Step 1: Write the implementation** (wiring only — logic already tested; smoke-tested on hardware in Task 6)
+- [x] **Step 1: Write the implementation** (wiring only — logic already tested; smoke-tested on hardware in Task 6)
 
 ```go
 // cmd/infinid/main.go
@@ -718,12 +718,12 @@ func run(device string, rec *capture.Recorder) error {
 }
 ```
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 Run: `go build ./... && go vet ./...`
 Expected: clean.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add cmd/infinid/main.go
@@ -738,7 +738,7 @@ git commit -m "feat(cmd): daemon main — serial reconnect loop, frame log, JSON
 - Create: `/addons/infinid/config.yaml`, `/addons/infinid/Dockerfile`, `/addons/infinid/run.sh`
 - Reference copies in-repo: `deploy/haos-addon/{config.yaml,Dockerfile,run.sh}` (identical content, so the repo documents the add-on)
 
-- [ ] **Step 1: Write the add-on files (repo copies first)**
+- [x] **Step 1: Write the add-on files (repo copies first)**
 
 `deploy/haos-addon/config.yaml`:
 ```yaml
@@ -779,7 +779,7 @@ exec /infinid \
 ```
 (Note: the by-id path is the Hunterhill dongle; a future add-on option makes it configurable — YAGNI for Phase 1.)
 
-- [ ] **Step 2: Commit the reference copies**
+- [x] **Step 2: Commit the reference copies**
 
 ```bash
 git add deploy/haos-addon/
@@ -788,7 +788,7 @@ git push
 ```
 (Push REQUIRED before the Pi build — the Dockerfile clones from GitHub.)
 
-- [ ] **Step 3: Install on the Pi — stop the stopgap first (serial port is exclusive)**
+- [x] **Step 3: Install on the Pi — stop the stopgap first (serial port is exclusive)**
 
 ```bash
 ssh root@192.168.86.48 'ha addons stop local_infinitive && mkdir -p /addons/infinid'
@@ -797,7 +797,7 @@ ssh root@192.168.86.48 'ha store reload && sleep 3 && ha addons install local_in
 ```
 Expected: install builds (~2-4 min on the Pi), start succeeds.
 
-- [ ] **Step 4: Smoke-verify frames + capture file**
+- [x] **Step 4: Smoke-verify frames + capture file**
 
 ```bash
 ssh root@192.168.86.48 'ha addons logs local_infinid | tail -5'
@@ -809,7 +809,7 @@ ssh root@192.168.86.48 'wc -l /share/infinid/capture.jsonl && tail -2 /share/inf
 ```
 Expected: growing line count; JSONL lines with ts/src/dst/op/data hex fields.
 
-- [ ] **Step 5: Commit any fixes discovered during smoke** (if none, skip)
+- [x] **Step 5: Commit any fixes discovered during smoke** (if none, skip)
 
 ---
 
@@ -818,7 +818,7 @@ Expected: growing line count; JSONL lines with ts/src/dst/op/data hex fields.
 **Files:**
 - Create: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Write the workflow**
+- [x] **Step 1: Write the workflow**
 
 ```yaml
 name: ci
@@ -838,7 +838,7 @@ jobs:
       - run: go test ./...
 ```
 
-- [ ] **Step 2: Commit, push, verify**
+- [x] **Step 2: Commit, push, verify**
 
 ```bash
 git add .github/workflows/ci.yml
