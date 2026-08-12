@@ -34,14 +34,14 @@
 **Files:**
 - Create: `cmd/businspect/main.go`
 
-- [ ] **Step 1: Implement.** `businspect <tables|timeline|diff|alarms> [flags]`, shared flag `-in` (path, default `-` = stdin).
+- [x] **Step 1: Implement.** `businspect <tables|timeline|diff|alarms> [flags]`, shared flag `-in` (path, default `-` = stdin).
   - `tables`: one line per (owner, reg) sorted by owner then reg: `owner reg count len distinct changed-offsets first..last`; then a second section listing READ-poll cadence per (owner, reg): average interval from consecutive READ timestamps (skip if <2 polls).
   - `timeline -reg <hex> [-owner <4-hex>]`: chronological `Changes` output: `ts  payload-hex  changed:[offsets]`. If `-owner` omitted and multiple owners answer that reg, print all, prefixed by owner.
   - `diff -at <RFC3339> [-window 2m]`: `DiffAt` output: `owner reg  changed:[offsets]` then indented `- before-hex` / `+ after-hex`. This is the labeled-experiment workhorse — output must make single-byte changes instantly visible.
   - `alarms`: (a) every frame with op `1e` or `15` printed raw with ts; (b) every distinct ACK06 payload of reg `004202` (fault history LASTTEN — layout per docs/protocol-tables.md §faults, UNVERIFIED) decoded best-effort: 10 × 7-byte entries `code src-addr hh:mm days-since-2013-01-01→date status(active,count)`, skipping all-zero entries, labeled `(unverified decode)`; (c) if no alarm/fault data at all, say so.
   - Errors to stderr, exit 1; malformed-line skip count to stderr as a one-line note.
-- [ ] **Step 2: Verify.** `go build ./... && go vet ./... && gofmt -l .` clean; smoke: pipe a 3-line fixture through each subcommand.
-- [ ] **Step 3: Commit** `feat(businspect): tables/timeline/diff/alarms CLI over capture JSONL`.
+- [x] **Step 2: Verify.** `go build ./... && go vet ./... && gofmt -l .` clean; smoke: pipe a 3-line fixture through each subcommand.
+- [x] **Step 3: Commit** `feat(businspect): tables/timeline/diff/alarms CLI over capture JSONL`.
 
 ---
 
