@@ -18,16 +18,16 @@
 - Create: `inspect/inspect.go`
 - Test: `inspect/inspect_test.go`
 
-- [ ] **Step 1: Tests first.** Fixture = a JSONL string built in the test from ~10 hand-written records (use the real schema; include: two ACK06 payload versions of register `000306` from src `3e01` at distinct timestamps, a READ poll pair for cadence, one op `1e` frame, one bare `ACK06` with 1-byte data, one malformed line). Test:
+- [x] **Step 1: Tests first.** Fixture = a JSONL string built in the test from ~10 hand-written records (use the real schema; include: two ACK06 payload versions of register `000306` from src `3e01` at distinct timestamps, a READ poll pair for cadence, one op `1e` frame, one bare `ACK06` with 1-byte data, one malformed line). Test:
   - `ParseAll(r io.Reader) ([]Rec, int, error)` returns records in order, skipped-line count = 1, fields parsed (ts/src/dst/op/data bytes).
   - `Key(r Rec) (reg string, owner uint16, ok bool)` — ACK06 → (`000306`, src, true); READ → (reg, dst, true); 1-byte ACK06 → ok=false.
   - `Group(recs) map[GroupKey]*Stats` where `GroupKey{Owner uint16; Reg string}` and `Stats{Count int; First, Last time.Time; PayloadLen int; Distinct [][]byte; ChangedOffsets []int}` — Distinct holds payloads (post-register bytes, i.e. `Data[3:]`) in first-seen order; ChangedOffsets = byte positions that differ across any pair of Distinct.
   - `Changes(recs, owner, reg) []Change` with `Change{TS time.Time; Payload []byte; ChangedFrom []int}` — one entry per time the payload differs from the previous one for that (owner, reg).
   - `DiffAt(recs, at time.Time, window time.Duration) []RegDiff` with `RegDiff{Owner uint16; Reg string; Before, After []byte; Changed []int}` — per (owner,reg): last payload in `[at-window, at]` vs first in `(at, at+window]`, only where both exist and differ.
-- [ ] **Step 2: Run, verify failure.** `go test ./inspect/` → undefined symbols.
-- [ ] **Step 3: Implement.** No logging, no globals; exported API exactly as tested; doc comments on all exported identifiers; `gofmt` clean.
-- [ ] **Step 4: `go test -run . ./inspect/ -v` → PASS; `go vet ./...` clean.**
-- [ ] **Step 5: Commit** `feat(inspect): capture parsing, register grouping, change timelines, event diff`.
+- [x] **Step 2: Run, verify failure.** `go test ./inspect/` → undefined symbols.
+- [x] **Step 3: Implement.** No logging, no globals; exported API exactly as tested; doc comments on all exported identifiers; `gofmt` clean.
+- [x] **Step 4: `go test -run . ./inspect/ -v` → PASS; `go vet ./...` clean.**
+- [x] **Step 5: Commit** `feat(inspect): capture parsing, register grouping, change timelines, event diff`.
 
 ### Task 2: `cmd/businspect` CLI
 
