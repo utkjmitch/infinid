@@ -452,6 +452,10 @@ Sequence of 4-byte entries: `key(1) value(u24 BE)`. IDU keys
 hours: 0x25 low_heat, 0x26 high_heat, 0x49 med_heat, 0x2C poweron,
 0x2E blower; 0x27/0x28/0x29/0x2A unknown.
 
+> **Hunterhill 2026-08-13: CONFIRMED byte-exact** against the wall-control
+> run/times menu pages (12/12 values), on both 3e01 and 5201. See the
+> verification section below.
+
 ### Other IDU registers (wiki only)
 
 - `0305`: writes from thermostat to IDU, layout varies.
@@ -545,6 +549,11 @@ faults. 10 entries × 7 bytes, newest first (entry 0 = latest):
 
 Empty slots are all-zero (skip when code=source=days=0). Timestamps are naive
 local wall-clock.
+
+> **Hunterhill 2026-08-13**: the wall control serves its fault-history and
+> "last 10 system events" UI pages from **local storage — zero bus traffic**
+> (no 4202 reads; nothing on this bus ever reads the wall control at all).
+> Reading 4202 requires an active SAM-role reader (Phase 2 path).
 
 **Fault code meanings**: not documented by any source. infinitesp's text sensor
 comment: "Human-readable descriptions require a verified Carrier Infinity /
@@ -657,3 +666,49 @@ listed fields only.
 - Vacation preset produced **zero** observable bus traffic in 102 s; only
   artifact was the 41F hold-bit clear 12 s after resume. Vacation state is
   wall-control-internal (no SAM active on this bus).
+
+---
+
+## Hunterhill live verification — 2026-08-13 wall-control session
+
+Labeled wall-control menu walk (filter / fault history / run-time counter
+pages) plus a full HEAT-mode exercise with a timed hold, against a ~296k
+frame morning capture. Full evidence chains:
+[experiments/2026-08-13-wall-control-session.md](experiments/2026-08-13-wall-control-session.md).
+Note: local time is **UTC-4 (EDT)**, proven by the `000202` broadcasts.
+
+### Confirmed prior-art claims
+
+| Register (owner) | Verified meaning | Conf |
+|---|---|---|
+| `000310`/`000311` (3e01) | KV cycle-counter / lifetime-hours tables `key(u8) value(u24 BE)` — **byte-exact vs the panel's GAS HEAT CYCLES / LIFETIME HOURS pages**: 0x23/0x24 heat stage1/2 cycles (6598/13), 0x2B poweron (24), 0x2D blower (20470); hours 0x25/0x26 (1035/9), 0x2C poweron (13368), 0x2E blower (4990). 0x48/0x49 med-heat = 0 (2-stage furnace). Unknowns 0x27 = 12151 / 0x29 = 4062 shadow the ODU cool counters (cooling-blower tally hypothesis, LOW) | HIGH |
+| `000310`/`000311` (5201) | Same KV layout — byte-exact vs COOLING CYCLES / RUN TIMES pages: 0x28 cool cycles (12537), 0x2B poweron (6), 0x2A cool hours (4171), 0x2C poweron hours (13808); 0x23/0x25 heat and 0x3C/0x3D defrost all 0 (gas heat). Cool-cycle count increments ~6 s after compressor **start** | HIGH |
+| `4202` fault history | **Negative confirmed**: panel fault/system-event pages generate zero bus reads; the known entry bytes (codes 0xAB/0xAC, day 0x135C, 09:16) appear nowhere in the capture; nothing ever reads the wall control. UI is local storage; SAM read is the only bus path | HIGH |
+| `000302` (3e01) TLV id 0x14 | **LAT / supply-air thermistor confirmed**: 70.25→78.2 °F monotonic rise across the gas-heat run, still rising post-burner-off (lagged sensor placement) — closes the 8/12 identity question | HIGH |
+| `00041F`[6] | heat setpoint °F confirmed by manipulation (0x44→0x4E=78 at mode change; was MED) | HIGH |
+
+### Refined / new decodes
+
+| Register | Finding | Conf |
+|---|---|---|
+| `000305` (write 2001→3e01) | **Mode semantics**: [0] = commanded heat stage (gas furnace 01 low / 02 high — echoed by `000316`[0]), [2] = cool-demand flag (0x02 cooling / 0x00), [4..5] u16 BE commanded CFM (heat airflow 0x0510 = 1296 here), [11]=0x78 const. Commanded CFM **0** cedes airflow to the IDU (post-heat purge ran 1134 CFM uncommanded) | HIGH (purge autonomy LOW-MED) |
+| `000605` (write 2001→5201, 7 B) | [0..3] float stage (0.0 for the entire gas-heat run — compressor fully off); **NEW [4] = system mode flag 01 cool / 00 heat**; [6]=0x01 const | float HIGH, [4] MED |
+| `00041F` hold encoding | **Timed hold ("hold until")**: [1] = 0x18 marker, **[3..4] u16 BE = remaining time in 2-second ticks (minutes × 30)** — 0x4BD2 = 19410 = 647 min = exactly set-time→8:00 PM EDT; decrements 30/min with byte-borrow. [0] bit7 stays the *indefinite*-hold flag (other zone held 0x80 with no timer). Cool setpoint auto-bumped to heat+2 (0x50=80) for deadband. Countdown kept running ≥60 s after the panel hold-clear (clearing behavior open) | HIGH (clear tail open) |
+| `000308` heat profile | Heat opened the **basement** damper full (`0e 08 0f`) — byte2 = basement confirmed by manipulation; heat/cool use different zone profiles | HIGH |
+| `000306` (3e01) | Heat blower ramp 0→400→725→870 RPM at 1296 CFM echo; [9] 0x08→0x00 while blower stopped | HIGH ([9] MED) |
+| Keepalive cadence | Thermostat WRITEs are **periodic state rebroadcasts, not event commands**: 10.2 s group (`000605` `00060D` `000610` `000612` `00061A` `00061E` `000305` `000307` `000308` `003404`), 20.3 s pair (`00060B`+`000406`), ~5 s zone pushes (`00041F` `000420`), 60 s time broadcasts — payloads unchanged across hours of idle; changes ride the next slot | HIGH |
+| `000420` (write 2001→2201/2301, 20 B) | **NEW — environment push to zone sensors**: [6..7] u16/16 °F = OAT, [10] RH %, [18..19] local hh:mm, [11..12]/[14..15] = 60/80 (limits?) | LOW-MED |
+| `00041E`[13] | 0x00→0xC0 at heat/hold start (flags, unknown) | LOW |
+
+### Session behavioral findings
+
+- Wall-control menu pages (filter, faults, counters) trigger **no
+  incremental bus reads** — everything is served from its continuous ~10–16 s
+  polling cache or local storage (57/57 read keys in the session window also
+  present in idle baseline).
+- A Carrier-cloud heat command during an outage produced **zero** bus
+  traffic (cloud path confirmed fully decoupled from the bus).
+- Mode restore rewrote heat setpoints to the *scheduled* target (71), not
+  the pre-session value (68).
+- Bus writes led hand labels by ~16–25 s consistently (panel acts, then the
+  operator logs).
