@@ -734,7 +734,7 @@ git commit -m "feat(cmd): daemon main — serial reconnect loop, frame log, JSON
 
 ### Task 6: HAOS local add-on + hardware smoke test
 
-**Files (on the Pi via SSH `root@192.168.86.48`, NOT in this repo):**
+**Files (on the Pi via SSH `root@<ha-host>`, NOT in this repo):**
 - Create: `/addons/infinid/config.yaml`, `/addons/infinid/Dockerfile`, `/addons/infinid/run.sh`
 - Reference copies in-repo: `deploy/haos-addon/{config.yaml,Dockerfile,run.sh}` (identical content, so the repo documents the add-on)
 
@@ -791,21 +791,21 @@ git push
 - [x] **Step 3: Install on the Pi — stop the stopgap first (serial port is exclusive)**
 
 ```bash
-ssh root@192.168.86.48 'ha addons stop local_infinitive && mkdir -p /addons/infinid'
-scp deploy/haos-addon/config.yaml deploy/haos-addon/Dockerfile deploy/haos-addon/run.sh root@192.168.86.48:/addons/infinid/
-ssh root@192.168.86.48 'ha store reload && sleep 3 && ha addons install local_infinid && ha addons start local_infinid'
+ssh root@<ha-host> 'ha addons stop local_infinitive && mkdir -p /addons/infinid'
+scp deploy/haos-addon/config.yaml deploy/haos-addon/Dockerfile deploy/haos-addon/run.sh root@<ha-host>:/addons/infinid/
+ssh root@<ha-host> 'ha store reload && sleep 3 && ha addons install local_infinid && ha addons start local_infinid'
 ```
 Expected: install builds (~2-4 min on the Pi), start succeeds.
 
 - [x] **Step 4: Smoke-verify frames + capture file**
 
 ```bash
-ssh root@192.168.86.48 'ha addons logs local_infinid | tail -5'
+ssh root@<ha-host> 'ha addons logs local_infinid | tail -5'
 ```
 Expected: `frame: 2001 -> 3e01: READ ...` lines (live bus traffic).
 
 ```bash
-ssh root@192.168.86.48 'wc -l /share/infinid/capture.jsonl && tail -2 /share/infinid/capture.jsonl'
+ssh root@<ha-host> 'wc -l /share/infinid/capture.jsonl && tail -2 /share/infinid/capture.jsonl'
 ```
 Expected: growing line count; JSONL lines with ts/src/dst/op/data hex fields.
 
