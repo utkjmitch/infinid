@@ -2249,6 +2249,11 @@ type entityDef struct {
 
 func pct15(v float64) string { return fmt.Sprintf("%.0f", v/15.0*100.0) }
 
+// inv100 publishes bus-native "consumed %" fields as the remaining % every
+// consumer convention expects (decided in plan grill; REST keeps the raw
+// used value).
+func inv100(v float64) string { return fmt.Sprintf("%.0f", 100.0-v) }
+
 // sysEntities: system-level sensors. The first 9 + the damper pattern are
 // the frozen dashboard contract.
 var sysEntities = []entityDef{
@@ -2267,7 +2272,7 @@ var sysEntities = []entityDef{
 	{field: "suction_temp", object: "suction_temp", name: "Suction temp", unit: "°F", deviceClass: "temperature", stateClass: "measurement"},
 	{field: "superheat", object: "superheat", name: "Superheat", unit: "°F", stateClass: "measurement"},
 	{field: "line_voltage", object: "line_voltage", name: "Line voltage", unit: "V", deviceClass: "voltage", stateClass: "measurement"},
-	{field: "filter_life_used", object: "filter_life", name: "Filter life used", unit: "%"},
+	{field: "filter_life_used", object: "filter_life", name: "Filter life", unit: "%", transform: inv100},
 	{field: "heat_stage1_cycles", object: "heat_stage1_cycles", name: "Heat stage 1 cycles", stateClass: "total_increasing"},
 	{field: "heat_stage2_cycles", object: "heat_stage2_cycles", name: "Heat stage 2 cycles", stateClass: "total_increasing"},
 	{field: "blower_cycles", object: "blower_cycles", name: "Blower cycles", stateClass: "total_increasing"},
@@ -3187,7 +3192,9 @@ fills in only when SAM reads are enabled (`sam: true`).
 
 ## System / equipment (additive)
 
-`sensor.infinid_{outdoor_temp,supply_air_temp,suction_temp,superheat,line_voltage,filter_life,system_mode}`
+`sensor.infinid_{outdoor_temp,supply_air_temp,suction_temp,superheat,line_voltage,system_mode}`
+and `sensor.infinid_filter_life` (**remaining %** — the bus reports consumed %,
+inverted at the contract boundary; REST `/state` shows the raw used value)
 plus runtime counters
 `sensor.infinid_{heat_stage1,heat_stage2,blower,cool}_{cycles,hours}` and
 `sensor.infinid_{idu,odu}_power_cycles` (state_class total_increasing —
@@ -3202,6 +3209,11 @@ long-term statistics candidates).
 The full event journal (fault lifecycle, outage classification, device
 liveness) is not an MQTT surface: `GET /events` on the REST port, or the
 journal JSONL file itself.
+
+**REST invariant:** the REST surface is read-only forever. If writes ever
+exist (v2), they arrive via MQTT command topics behind broker auth — never
+REST. This is what makes the unauthenticated debug port acceptable on a
+trusted LAN; do not add POST/PUT handlers.
 
 ## Devices
 
@@ -3242,6 +3254,10 @@ boot: auto
 uart: true
 map:
   - share:rw
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: "REST debug/export (read-only, UNAUTHENTICATED — blank the host port here to keep it container-internal; never port-forward it)"
 options:
   serial: "/dev/serial/by-id/CHANGE-ME"
   mqtt_broker: ""
@@ -3315,6 +3331,7 @@ Must open with the project's one-paragraph purpose (local, read-only decoding of
 
 This project provides **software and a method — not electrical instruction.**
 
+- **Nothing here is professional HVAC, electrical, or safety advice.**
 - Your HVAC equipment is your responsibility. This software is MIT-licensed
   and comes with **no warranty of any kind.**
 - **Kill power at the breaker** before opening equipment or touching any
@@ -3340,7 +3357,7 @@ Sections: **What a tap is** — the ABCD bus is four low-voltage wires (A/B data
 
 - [ ] **Step 4: Write `03-first-capture.md`**
 
-Sections: install (build from source `go build ./cmd/infinid`, or the HAOS local add-on in `deploy/haos-addon/` — copy to `/addons/infinid`, set the `serial` option to your by-id path); first run (`infinid -serial /dev/serial/by-id/<yours> -capture capture.jsonl -verbose`); **what healthy looks like** (a steady stream, hundreds to ~1,500 frames/min on a zoned Touch system, resync bytes near zero after startup); **what unhealthy looks like** (zero frames → check A/B swap — reversed polarity reads nothing; constant resyncs → loose connection); the capture file is JSONL, one frame per line, and it is the raw material for everything that follows.
+Sections: install (build from source `go build ./cmd/infinid`, or the HAOS local add-on in `deploy/haos-addon/` — copy to `/addons/infinid`, set the `serial` option to your by-id path); first run (`infinid -serial /dev/serial/by-id/<yours> -capture capture.jsonl -verbose`); **what healthy looks like** (a steady stream, hundreds to ~1,500 frames/min on a zoned Touch system, resync bytes near zero after startup); **what unhealthy looks like** (zero frames → check A/B swap — reversed polarity reads nothing; constant resyncs → loose connection); the capture file is JSONL, one frame per line, and it is the raw material for everything that follows. Close with the REST note: the debug port (8099) is read-only but **unauthenticated** — fine on a trusted LAN, disable the host mapping in the add-on Network panel if unsure, and never port-forward it to the internet.
 
 - [ ] **Step 5: Write `04-decode-workflow.md`**
 
@@ -3474,7 +3491,7 @@ git add README.md && git commit -m "docs: README — Phase 2 surface, guide + sk
 
 Not subagent tasks — these need the live bus, host credentials, or the private hunterhill repo:
 
-1. **Passive validation**: deploy add-on v0.2.0 (SAM off), confirm the 12 contract entities + zone 2/3 entities appear in HA and track the wall panel through a setpoint change. Dashboard HvacPage DiagTiles light up with zero app changes.
+1. **Passive validation**: create a dedicated `infinid` user on the operator's Mosquitto broker (per-service credentials, macfactory pattern; password lives host-side only — for Hunterhill: `C:\Users\jimmy\.hunterhill\mqtt-infinid.txt` — and is entered once into add-on options, never a repo). Deploy add-on v0.2.0 (SAM off), confirm the 12 contract entities + zone 2/3 entities appear in HA and track the wall panel through a setpoint change. Dashboard HvacPage DiagTiles light up with zero app changes.
 2. **SAM live gate**: enable `sam_reads: true`; verify 3B02/3B03/3B05/4202 replies decode against ground truth (ha_carrier entities for bedrooms setpoint + filter %; the panel event log 171/172 for faults). Capture the real replies, cut them into `protocol/testdata/` fixtures, tighten the Task 4 synthetic tests into golden tests, adjust layouts if live bytes disagree (targeted-then-bounded-sweep per spec §2 if candidates fail).
 3. **Comparator (hunterhill repo, private)**: HA template package computing infinid-vs-ha_carrier deltas per zone; runs for the validation window, retires at cutover.
 4. **Journal verification**: restart the add-on → `monitoring_gap` classified; flip the HVAC breaker off/on briefly (Jimmy's call, not automated) → `hvac_power_loss`.
