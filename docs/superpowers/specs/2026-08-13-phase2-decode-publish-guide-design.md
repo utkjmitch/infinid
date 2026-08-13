@@ -63,8 +63,10 @@ Scheduler design (conservative by construction):
 
 - Sequential — one outstanding read at a time, minimum spacing between reads (default
   ≥ 2 s), never interleaved into another device's transaction window.
-- Cadence: own-zone setpoints ~30 s; fault history and filter life hourly (plus one
-  read at startup).
+- Cadence (decided in grill): own-zone setpoints every 10 s fixed — next to the wall
+  control's own 1 s polling this is negligible airtime, and it keeps the panel's own
+  zone as fresh as the passively-snooped ones; fault history and filter life hourly
+  (plus one read at startup).
 - NACK / timeout → exponential backoff per register; repeated failure marks the field
   unavailable, never retries hot.
 - **`-passive-only` flag disables all active reads.** This is the recommended first
@@ -79,8 +81,39 @@ verified* — they are wall-control-local. Phase 2 includes a bounded discovery 
 live SAM probes of candidate registers with `businspect diff` analysis, validated
 against known panel ground truth (our fault log shows codes 171/172 on 07/28/26; the
 filter page shows a known %). Decoders for these three are written only after that
-task verifies layouts, same standard as everything else. If discovery stalls, the
-three fields ship as "not yet decoded" and Phase 2 does not block on them.
+task verifies layouts, same standard as everything else. Discovery is
+targeted-then-bounded-sweep (decided in grill): probe the prior-art candidate
+registers first; if they NACK or decode wrong, sweep a defined window of the wall
+control's table space with spaced read-only probes (ACK/NACK is itself signal),
+analyzed offline. "Not yet decoded" is the outcome of an exhausted bounded search,
+not a shallow one. Ground truth for validating own-zone setpoint and filter-life
+decodes comes live from the incumbent cloud integration's entities; fault-history
+decode validates against the operator's panel event log.
+
+### 2a. Event journal — faults, outages, liveness (decided in grill)
+
+An append-only JSONL journal on disk (next to the capture file, survives restarts)
+recording the unit's service history — the artifact you hand a technician:
+
+- **Faults.** The panel's last-10 event list is a *source, not the store*: the
+  hourly SAM read is diffed, new entries become journal records with code, text,
+  first-seen, last-seen, cleared-at, and best-effort resolution cause
+  (`self_cleared` / `manually_cleared` / `unknown` — the daemon itself never clears
+  anything; v1 is read-only). If live alarm traffic is verified on the bus, it
+  feeds near-real-time active-fault state; until then active-state comes from the
+  hourly diff.
+- **Per-device liveness.** The wall control round-robin polls every bus node ~1 s;
+  `state` tracks last-seen per bus address, distinguishing *whole bus silent*
+  (HVAC power off or tap failure) from *one device missing* (equipment problem →
+  `device_lost` / `device_recovered` events) from healthy.
+- **Outage classification via power-on counters.** On startup the daemon reads the
+  verified power-on cycle/hour counters (KV keys `2b`/`2c`) and compares to the
+  last journaled values: counter unchanged → the HVAC never lost power (the gap
+  was ours — host reboot); counter incremented → the HVAC genuinely lost power
+  during the gap. Combined with the host's own restart timing this separates
+  house-wide outage / HVAC-only power loss / monitoring-only gap — written
+  retroactively at power-up, so even unwitnessed outages get classified. No
+  battery backup required for a correct history.
 
 ## 3. `mqtt` package — HA discovery publisher
 
@@ -88,19 +121,36 @@ Exporter DNA (proven in production elsewhere): retained discovery + retained sta
 LWT availability (bus silence or daemon death ⇒ `offline`), change-detection with a
 periodic heartbeat republish, additive-only contract.
 
+**Device grouping (decided in grill):** one `infinid` HA device holds diagnostics,
+counters, and daemon health; each zone gets its own HA device holding that zone's
+sensors. Users think in zones, not bus addresses — no per-bus-node devices.
+
 Entity surface:
 
+- **Zone identity (decided in grill):** zone *count* is autodetected from bus
+  traffic — per-zone damper bytes and zone-sensor transactions reveal which zone
+  indexes are live; zones appear as discovered (additive, never removed at runtime).
+  Config supplies *names only*: an ordered `zone_names` list mapping index → name,
+  defaulting to `zone_1..zone_N`, validated at startup as entity-id-safe slugs
+  (lowercase, underscores). Names are cosmetic; indexes are the truth.
 - **Diagnostics — these 12 ids verbatim** (a consuming dashboard already binds them):
   `sensor.infinid_compressor_stage`, `_compressor_rpm`, `_supply_cfm`, `_blower_rpm`,
   `_static_pressure`, `_blower_watts`, `_suction_pressure`, `_outdoor_coil_temp`,
   `_discharge_temp`, `_damper_bedrooms`, `_damper_living_room`, `_damper_basement`.
-  Damper ids follow `sensor.infinid_damper_<zone>` from the configured zone names.
+  Damper ids follow `sensor.infinid_damper_<zone>` from the configured zone names —
+  the author's deployment sets `zone_names: bedrooms,living_room,basement` to
+  reproduce these ids exactly.
 - **Per zone:** `sensor.infinid_zone_<name>_{temp,humidity,cool_setpoint,heat_setpoint,fan_mode,hold,hold_remaining,damper}`.
   Sensors only — no MQTT climate entities in Phase 2. A read-only thermostat card
   that ignores taps is worse than no card; climate stays with the incumbent
   integration until v2 writes are validated.
 - **Counters:** cycle counts and run hours from the KV tables (long-term statistics
   candidates).
+- **Faults & liveness:** `sensor.infinid_last_fault` (state = code; attributes:
+  text, timestamp, occurrence count), `binary_sensor.infinid_fault_active`,
+  `sensor.infinid_fault_count`, `binary_sensor.infinid_bus_online` (per-device
+  last-seen as attributes). The full journal is served by REST and the file
+  itself, not MQTT.
 - **Daemon health:** availability, frames/sec, CRC-fail rate, unknown-frame count,
   last-frame age, SAM read failure count.
 
@@ -111,7 +161,8 @@ Contract documented in `docs/MQTT-CONTRACT.md`; additive changes only.
 ## 4. `rest` package — minimal debug
 
 `GET /status` (health + counters), `GET /state` (full `SystemState` JSON),
-`GET /frames` (ring-buffer dump). Read-only, no auth (bind localhost by default;
+`GET /frames` (ring-buffer dump), `GET /events` (the event journal — the
+technician export). Read-only, no auth (bind localhost by default;
 add-on exposes on the container network only). Unchanged scope from the parent
 design.
 
@@ -123,6 +174,12 @@ an operator's private entity ids. It lives in the operator's own HA config (ours
 a template package computing per-field deltas). This repo documents the *method* in
 the guide (§6) so others can build their own. A field is trusted when it tracks
 through change, not just at rest; full trust remains the gate for v2 writes.
+
+**The comparator is scaffolding, not architecture (decided in grill):** the cloud
+integration runs in parallel only during the validation window. The end state is
+fully local — the cloud reference disappears, so nothing in infinid may depend on
+it: no code path, no config key, no entity assumption. Validation-by-comparison is
+a documented *method* applied from outside, and it retires with the cutover.
 
 ## 6. The community skill — "decode your own system"
 
@@ -154,7 +211,11 @@ Two layers, one content source:
 **`skills/decode-your-infinity-bus/SKILL.md`** — the same journey in the open Agent
 Skills format (plain markdown + name/description frontmatter) so any agent — Claude,
 Copilot, Gemini, whatever comes next — can load it and walk a user through the guide
-interactively. The skill references the guide files rather than duplicating them.
+interactively. One skill covers the whole journey (decided in grill): staged with
+explicit checkpoints — the agent verifies each stage's exit criterion (e.g. "clean
+frames at the expected rate") before advancing, and can resume mid-journey ("I
+already have a tap"). The skill references the guide files rather than duplicating
+them.
 Hard rules stated in the skill itself, for the agent to enforce:
 
 - Read-only always; recommend `-passive-only` until the user's decode is verified.
