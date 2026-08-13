@@ -31,7 +31,6 @@ Decoders ship for exactly the registers verified live on 2026-08-12/13:
 | `000308` / `000319` | damper positions, one byte per zone, `0x00–0x0F` (write + ~10–15 s mirror) |
 | `000310` / `000311` | KV counter tables (key u8 + u24 BE): cycle counts / run hours per stage, blower, power |
 | `000413` | measured CFM (`[0-1]`), RPM (`[2-3]`), static pressure float32 in-wc (`[4-7]`), blower watts float32 (`[8-11]`) |
-| `000420` | environment push to sensors: OAT ×16 (`[6-7]`), RH % (`[10]`), local hh:mm (`[18-19]`) |
 | `00041F` | zone setpoints: cool °F (`[7]`), heat °F (`[6]`), fan enum (`[5]`), timed-hold marker (`[1]=0x18`) + remaining 2-second ticks (`[3-4]` u16 BE), indefinite-hold bit (`[0]` bit 7) |
 | `000604` / `000605` / `00060E` | compressor: target/actual RPM + per-stage RPM tables; commanded stage float32 + mode flag (`[4]`); actual stage (`[0]`) |
 | `000625` | power-like analog u16 (`[0-1]`) |
@@ -39,7 +38,9 @@ Decoders ship for exactly the registers verified live on 2026-08-12/13:
 Rules:
 
 - **Unknown or unverified → archived, counted, never an error.** The Phase 1 ring
-  buffer and capture stream remain the contribution surface.
+  buffer and capture stream remain the contribution surface. (This includes
+  `000420` — its env-push layout is LOW-MED confidence and duplicates verified
+  fields, so per ADR-0001 it stays on the archive path.)
 - A decoder that sees a frame shorter than its layout logs once and archives — no
   partial guesses.
 - Readings are typed values `{source addr, register, field, value, unit, timestamp}`;
