@@ -712,3 +712,21 @@ Note: local time is **UTC-4 (EDT)**, proven by the `000202` broadcasts.
   the pre-session value (68).
 - Bus writes led hand labels by ~16–25 s consistently (panel acts, then the
   operator logs).
+
+---
+
+## Hunterhill multi-day verification — 2026-08-23 (unattended captures 08-13→08-20)
+
+No labels — pure longitudinal evidence from two 1-GiB archives
+(`capture-2026-08-13-to-16`, `capture-2026-08-18-to-20`; ~10.6M frames,
+~4.8 recorded days of cooling-season duty cycling). Full notes:
+[experiments/2026-08-23-longitudinal-findings.md](experiments/2026-08-23-longitudinal-findings.md).
+
+| Register | Finding | Conf |
+|---|---|---|
+| `000310`/`000311` (3e01) commit cadence | IDU counters are a **daily batch rollup, not per-cycle**: one commit/day at 21:02→21:23Z across 6 observed days, drifting **+3–4 min/day** (free-running ~24h04m timer, not wall-clock). Poweron hours (0x2C) advance exactly **+24 h/day** — a built-in self-check of both the decode and the cadence. Increment latency for any IDU counter is therefore up to ~24 h | HIGH |
+| `000310`/`000311` (3e01) keys 0x27/0x29 | Week-scale deltas in a cooling-only window: 0x27 +33–45 cycles/day, 0x29 +17–20 h/day, tracking the compressor duty cycle while all heat keys stayed frozen — **cooling-blower cycles / cooling-blower hours** (upgraded from LOW hypothesis). 0x28/0x2A stayed byte-constant at their 08-13 values on 3e01 | MED-HIGH |
+| `00041F` hold clear tail | **Natural expiry resolved** (was open from 08-13): countdown reaches 0 within seconds of the hold-until target (00:00:05Z for an 8:00 PM EDT hold, twice), and the *same frame* clears [1] 0x18→0x00 and reverts [6..7] setpoints to schedule (71/73→66/74). Scheduled transitions also land on [6..7] (06:00 EDT → 68/73). Steady idle shows [0]=0x80 on both sensors; [0] pulses 0x01↔0x00 (with [2] briefly 0x0C) during hold-set transactions | HIGH |
+| `000410` (3e01) | **NEW register**: wall control reads it 2–3× nightly at **local midnight** (04:01–04:02Z), all 5 observed nights; response constant u16 `0x02EB` = 747. Daily-checked threshold/counter, semantics unknown — watch for a change | LOW (existence HIGH) |
+| `000420` delivery mode | Flips between per-sensor unicast writes and **op `0C` broadcasts to F1F1** carrying the identical 20-B payload; observed transitions align to clock boundaries (unicast→broadcast 21:00Z; unicast resumes 12:00:12Z). OAT decode [6..7] holds across both modes | MED |
+| Bus health | Across all ~4.8 recorded days: **zero** op-`1E` alarm frames, zero NACK codes other than the ~1 s 3e01 `0x0A` poll refusal, resync bytes single-digit per hour | HIGH |
