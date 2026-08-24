@@ -41,16 +41,22 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 	reg := uint32(f.Data[0])<<16 | uint32(f.Data[1])<<8 | uint32(f.Data[2])
 	p := f.Data[3:]
 
+	// found reflects "a verified decoder matched" the register, independent
+	// of how many readings it produced — a decoder that legitimately sees
+	// zero present entries (e.g. an all-absent TLV set) is still ok=true.
 	var rs []Reading
+	found := false
 	switch reg {
 	case 0x000302:
 		rs = tlvTemps(owner, p)
+		found = true
 	default:
 		return nil, false
 	}
-	if len(rs) == 0 {
+	if !found {
 		return nil, false
 	}
+
 	for i := range rs {
 		rs[i].Owner = owner
 		rs[i].Reg = reg
@@ -71,7 +77,10 @@ var tlvNames = map[byte]string{
 	0x4a: "superheat",
 }
 
-// tlvTemps decodes the 4-byte TLV rows: tag(01=present) id value(u16 BE /16 °F).
+// tlvTemps decodes the 4-byte TLV rows: tag(01=present) id value(int16 BE /16 °F).
+// Signed per docs/protocol-tables.md Conventions (int16 BE / 16, prior-art
+// verified against a hooked thermistor); sub-zero range isn't yet
+// live-verified on this bus (winter capture pending), but the layout is.
 func tlvTemps(_ uint16, p []byte) []Reading {
 	var rs []Reading
 	for i := 0; i+4 <= len(p); i += 4 {
@@ -82,7 +91,7 @@ func tlvTemps(_ uint16, p []byte) []Reading {
 		if !known {
 			continue
 		}
-		rs = append(rs, Reading{Field: field, Value: float64(u16(p, i+2)) / 16.0})
+		rs = append(rs, Reading{Field: field, Value: float64(int16(u16(p, i+2))) / 16.0})
 	}
 	return rs
 }

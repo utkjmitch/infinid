@@ -78,8 +78,32 @@ func TestTLVTemperaturesODU(t *testing.T) {
 			t.Errorf("%s = %v, want %v", field, got[0].Value, want)
 		}
 	}
-	if len(find(rs, 0x5201, "unknown_0x4b")) != 0 {
-		t.Error("unverified TLV id 0x4b must not be decoded (ADR-0001)")
+	// The first 5201/000302 fixture frame has 6 tag-0x01 TLV rows (ids
+	// 0x11, 0x12, 0x30, 0x4a, 0x4b, 0x45); 0x4b is unverified (ADR-0001) so
+	// exactly 5 readings must come out of that one frame — not 6.
+	f := fixtures(t)[7] // 5201, 000302, first sample: testdata/frames.jsonl line 8
+	if f.F.Src != 0x5201 {
+		t.Fatalf("fixture[7] src = %04x, want 5201 (fixture order changed?)", f.F.Src)
+	}
+	got, ok := Decode(f.F, f.TS)
+	if !ok {
+		t.Fatal("Decode on verified 000302@5201 frame returned ok=false")
+	}
+	if len(got) != 5 {
+		t.Errorf("readings from first 5201/000302 frame = %d, want 5 (0x4b must be excluded)", len(got))
+	}
+}
+
+// TestDecodeOKOnHappyPath pins that a known-good verified frame reports
+// ok=true, not just a non-nil/non-empty slice.
+func TestDecodeOKOnHappyPath(t *testing.T) {
+	f := fixtures(t)[7] // 5201, 000302, first sample: testdata/frames.jsonl line 8
+	if f.F.Src != 0x5201 {
+		t.Fatalf("fixture[7] src = %04x, want 5201 (fixture order changed?)", f.F.Src)
+	}
+	_, ok := Decode(f.F, f.TS)
+	if !ok {
+		t.Error("Decode on verified 000302@5201 frame: ok = false, want true")
 	}
 }
 
@@ -105,5 +129,83 @@ func TestUndecodedFrameNotOK(t *testing.T) {
 	rs, ok := Decode(f, time.Now())
 	if ok || rs != nil {
 		t.Errorf("unverified register decoded: ok=%v rs=%v", ok, rs)
+	}
+}
+
+// TestDecodeMalformedInput pins no-panic behavior and reading counts for
+// truncated or partial frames.
+func TestDecodeMalformedInput(t *testing.T) {
+	cases := []struct {
+		name    string
+		data    []byte
+		wantOK  bool
+		wantLen int
+	}{
+		{
+			name:    "nil Data",
+			data:    nil,
+			wantOK:  false,
+			wantLen: 0,
+		},
+		{
+			name:    "3-byte Data (bare register, no payload)",
+			data:    []byte{0x00, 0x03, 0x02},
+			wantOK:  false,
+			wantLen: 0,
+		},
+		{
+			name: "000302 with one valid row plus 2 dangling trailing bytes",
+			// register(3) + [tag=01 id=0x11 value=0x04d9](4) + dangling(2)
+			data:    []byte{0x00, 0x03, 0x02, 0x01, 0x11, 0x04, 0xd9, 0xaa, 0xbb},
+			wantOK:  true,
+			wantLen: 1,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := bus.Frame{Src: 0x5201, Dst: 0x2001, Op: bus.OpAck06, Data: c.data}
+			rs, ok := Decode(f, time.Now())
+			if ok != c.wantOK {
+				t.Errorf("ok = %v, want %v", ok, c.wantOK)
+			}
+			if len(rs) != c.wantLen {
+				t.Errorf("len(readings) = %d, want %d", len(rs), c.wantLen)
+			}
+		})
+	}
+}
+
+// TestDecodeVerifiedEmptyIsOK pins that a verified register whose decoder
+// legitimately yields zero readings (e.g. an all-absent TLV set) still
+// reports ok=true — it must not be misrouted into the archive-unknown path.
+func TestDecodeVerifiedEmptyIsOK(t *testing.T) {
+	// register 000302, one TLV row with tag=0x00 (absent) for a known id.
+	f := bus.Frame{Src: 0x6001, Dst: 0x2001, Op: bus.OpAck06,
+		Data: []byte{0x00, 0x03, 0x02, 0x00, 0x11, 0x04, 0xd9}}
+	rs, ok := Decode(f, time.Now())
+	if !ok {
+		t.Fatal("verified register with zero present TLV rows: ok = false, want true")
+	}
+	if len(rs) != 0 {
+		t.Errorf("readings = %d, want 0", len(rs))
+	}
+}
+
+// TestTLVTemperatureNegative pins the int16 (signed) decode: 0xff60 = -160,
+// /16 = -10.0 °F. Real range not yet live-verified (winter capture pending)
+// but the layout is documented (docs/protocol-tables.md Conventions).
+func TestTLVTemperatureNegative(t *testing.T) {
+	f := bus.Frame{Src: 0x5201, Dst: 0x2001, Op: bus.OpAck06,
+		Data: []byte{0x00, 0x03, 0x02, 0x01, 0x11, 0xff, 0x60}}
+	rs, ok := Decode(f, time.Now())
+	if !ok {
+		t.Fatal("Decode returned ok=false")
+	}
+	got := find(rs, 0x5201, "outdoor_temp")
+	if len(got) != 1 {
+		t.Fatalf("outdoor_temp count = %d, want 1", len(got))
+	}
+	if got[0].Value != -10.0 {
+		t.Errorf("outdoor_temp = %v, want -10.0", got[0].Value)
 	}
 }
