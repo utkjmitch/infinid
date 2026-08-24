@@ -25,6 +25,9 @@ func zoneIndex(addr uint16) int {
 // 0x00-0x0F open fraction; 0xFF marks an absent slot (0x00 does NOT prove a
 // zone absent — see the zone-presence rule in state).
 func dampers(reg uint32, p []byte) []Reading {
+	if len(p) < 8 {
+		return nil
+	}
 	field := "damper_cmd"
 	if reg == 0x000319 {
 		field = "damper_position"
@@ -39,15 +42,20 @@ func dampers(reg uint32, p []byte) []Reading {
 	return rs
 }
 
-// zoneConfigPush — 00041F WRITE 2001→sensor: [0] bit7 indefinite hold,
-// [1]=0x18 timed-hold marker with [3..4] u16 BE remaining 2-second ticks,
-// [5] fan enum, [6] heat setpoint °F, [7] cool setpoint °F.
+// zoneConfigPush — 00041F WRITE 2001→sensor: [1]=0x18 timed-hold marker with
+// [3..4] u16 BE remaining 2-second ticks, [5] fan enum, [6] heat setpoint
+// °F, [7] cool setpoint °F. [0] bit7 was once thought to be an
+// indefinite-hold flag (08-13 session), but 08-23 longitudinal evidence
+// shows 0x80 is simply the steady-idle value of [0] on both zone sensors
+// with no hold active — see
+// docs/experiments/2026-08-23-longitudinal-findings.md. Permanent/indefinite
+// hold has no verified bus indicator yet, so it stays undecoded (ADR-0001).
 func zoneConfigPush(zone int, p []byte) []Reading {
 	if zone == 0 || len(p) < 8 {
 		return nil
 	}
 	hold := 0.0
-	if p[0]&0x80 != 0 || p[1] == 0x18 {
+	if p[1] == 0x18 {
 		hold = 1
 	}
 	rs := []Reading{
@@ -63,7 +71,8 @@ func zoneConfigPush(zone int, p []byte) []Reading {
 	return rs
 }
 
-// zoneSensorStatus — 00041E from sensor: [9..10] u16 BE temp ×16, [12] RH %.
+// zoneSensorStatus — 00041E from sensor: [9..10] u16 BE temp ×16 (HIGH
+// confidence), [12] RH % (MED confidence per docs/protocol-tables.md).
 func zoneSensorStatus(zone int, p []byte) []Reading {
 	if zone == 0 || len(p) < 13 {
 		return nil

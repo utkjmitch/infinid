@@ -32,7 +32,9 @@ func TestDamperFeedback(t *testing.T) {
 
 func TestZoneSetpointPush(t *testing.T) {
 	rs := decodeAll(t)
-	// 00041F WRITE 2001→2201 (zone 2) first fixture: heat 68, cool 73, fan auto, no hold.
+	// 00041F WRITE 2001→2201 (zone 2): 3 fixtures. First: heat 68, cool 73,
+	// fan auto, no hold. Second+third: verified timed holds (19410/19380
+	// ticks = 647/646 min); only those two carry hold_remaining_min.
 	var z2 []Reading
 	for _, r := range rs {
 		if r.Zone == 2 && r.Reg == 0x00041f {
@@ -43,31 +45,65 @@ func TestZoneSetpointPush(t *testing.T) {
 	for _, r := range z2 {
 		byField[r.Field] = append(byField[r.Field], r)
 	}
-	if v := byField["heat_setpoint"]; len(v) == 0 || v[0].Value != 68 {
-		t.Fatalf("heat_setpoint = %+v", v)
+	if v := byField["heat_setpoint"]; len(v) != 3 || v[0].Value != 68 {
+		t.Fatalf("heat_setpoint = %+v, want 3 readings, first 68", v)
 	}
-	if v := byField["cool_setpoint"]; len(v) == 0 || v[0].Value != 73 {
-		t.Fatalf("cool_setpoint = %+v", v)
+	if v := byField["cool_setpoint"]; len(v) != 3 || v[0].Value != 73 {
+		t.Fatalf("cool_setpoint = %+v, want 3 readings, first 73", v)
 	}
-	if v := byField["fan_mode"]; len(v) == 0 || v[0].Text != "auto" {
-		t.Fatalf("fan_mode = %+v", v)
+	if v := byField["fan_mode"]; len(v) != 3 || v[0].Text != "auto" {
+		t.Fatalf("fan_mode = %+v, want 3 readings, first auto", v)
 	}
-	// Second zone-2 fixture is the verified timed hold: 19410 ticks = 647 min.
-	if v := byField["hold_remaining_min"]; len(v) == 0 || v[0].Value != 647 {
-		t.Fatalf("hold_remaining_min = %+v, want 647", v)
+	if v := byField["hold"]; len(v) != 3 || v[0].Value != 0 || v[1].Value != 1 || v[2].Value != 1 {
+		t.Fatalf("hold = %+v, want [0 1 1]", v)
 	}
-	if v := byField["hold"]; len(v) < 2 || v[0].Value != 0 || v[1].Value != 1 {
-		t.Fatalf("hold = %+v, want [0 1 ...]", v)
+	if v := byField["hold_remaining_min"]; len(v) != 2 || v[0].Value != 647 || v[1].Value != 646 {
+		t.Fatalf("hold_remaining_min = %+v, want [647 646]", v)
 	}
 }
 
-func TestZoneIndefiniteHold(t *testing.T) {
+// TestZoneThreeNoFalseHold pins the 08-23 longitudinal correction: zone 3's
+// 00041F fixtures carry [0]=0x80 (steady-idle value, not a hold flag) and
+// [1]!=0x18 (no timed-hold marker), so all three readings must decode as
+// hold=0, not hold=1. See docs/experiments/2026-08-23-longitudinal-findings.md.
+func TestZoneThreeNoFalseHold(t *testing.T) {
 	rs := decodeAll(t)
-	// 00041F 2001→2301 (zone 3) fixtures all carry flags bit7 = indefinite hold.
+	var z3 []Reading
 	for _, r := range rs {
-		if r.Zone == 3 && r.Reg == 0x00041f && r.Field == "hold" && r.Value != 1 {
-			t.Fatalf("zone3 hold = %v, want 1 (indefinite)", r.Value)
+		if r.Zone == 3 && r.Reg == 0x00041f && r.Field == "hold" {
+			z3 = append(z3, r)
 		}
+	}
+	if len(z3) != 3 {
+		t.Fatalf("zone3 hold readings = %+v, want 3", z3)
+	}
+	for i, r := range z3 {
+		if r.Value != 0 {
+			t.Errorf("zone3 hold[%d] = %v, want 0 (0x80 is steady-idle, not hold)", i, r.Value)
+		}
+	}
+}
+
+func TestDamperCommand(t *testing.T) {
+	rs := decodeAll(t)
+	var z1, z2 []Reading
+	for _, r := range rs {
+		if r.Owner != 0x6001 || r.Field != "damper_cmd" || r.Reg != 0x000308 {
+			continue
+		}
+		switch r.Zone {
+		case 1:
+			z1 = append(z1, r)
+		case 2:
+			z2 = append(z2, r)
+		}
+	}
+	// Fixtures: [0]=0x00/0x0f/0x0f, [1]=0x0f/0x07/0x0c.
+	if len(z1) != 3 || z1[0].Value != 0 || z1[1].Value != 15 || z1[2].Value != 15 {
+		t.Fatalf("zone1 damper_cmd = %+v", z1)
+	}
+	if len(z2) != 3 || z2[0].Value != 15 || z2[1].Value != 7 || z2[2].Value != 12 {
+		t.Fatalf("zone2 damper_cmd = %+v", z2)
 	}
 }
 

@@ -100,8 +100,13 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 			rs = blowerTelemetry(p)
 			found = true
 		}
-	case 0x000308, 0x000319:
-		if owner == 0x6001 {
+	case 0x000308:
+		if owner == 0x6001 && f.Op == bus.OpWrite {
+			rs = dampers(reg, p)
+			found = true
+		}
+	case 0x000319:
+		if owner == 0x6001 && f.Op == bus.OpAck06 {
 			rs = dampers(reg, p)
 			found = true
 		}
@@ -113,9 +118,11 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 			}
 		}
 	case 0x00041e:
-		if z := zoneIndex(owner); z != 0 {
-			rs = zoneSensorStatus(z, p)
-			found = true
+		if f.Op == bus.OpAck06 {
+			if z := zoneIndex(owner); z != 0 {
+				rs = zoneSensorStatus(z, p)
+				found = true
+			}
 		}
 	case 0x000202:
 		if owner == 0xf1f1 {
