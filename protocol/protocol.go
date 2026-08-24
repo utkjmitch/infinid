@@ -50,6 +50,33 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 	case 0x000302:
 		rs = tlvTemps(owner, p)
 		found = true
+	case 0x000303:
+		if owner == 0x5201 {
+			rs = oduShortStatus(p)
+			found = true
+		}
+	case 0x000304:
+		if owner == 0x5201 {
+			rs = oduStatus(p)
+			found = true
+		}
+	case 0x000604:
+		rs = compressorRPM(p)
+		found = true
+	case 0x000605:
+		if f.Op == bus.OpWrite {
+			rs = compressorStageCmd(p)
+			found = true
+		}
+	case 0x00060e:
+		rs = compressorStage(p)
+		found = true
+	case 0x000625:
+		rs = oduAnalog(p)
+		found = true
+	case 0x000310, 0x000311:
+		rs = counters(reg, owner, p)
+		found = true
 	default:
 		return nil, false
 	}
