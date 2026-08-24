@@ -110,10 +110,11 @@ func TestCounters(t *testing.T) {
 		}
 	}
 
-	// The first 000310@3e01 fixture frame has 7 KV rows (keys 0x23, 0x24,
-	// 0x27, 0x28, 0x2b, 0x2d, 0x48) but only 4 are verified (0x23/0x24/0x2b/
-	// 0x2d); decoding it directly must yield exactly 4 readings, not 7 — this
-	// fails the moment an unverified key like 0x27/0x29/0x48 gets added.
+	// The first 000310@3e01 fixture frame carries six full KV rows (keys
+	// 0x23, 0x24, 0x27, 0x28, 0x2b, 0x2d) plus a truncated 3-byte tail (0x48)
+	// dropped by the stride bound. Only 4 keys are verified (0x23/0x24/0x2b/
+	// 0x2d), so exactly 4 readings — this fails the moment an unverified full
+	// row key like 0x27 or 0x28 gets added to counterName.
 	f := fixtures(t)[24] // 3e01, 000310, first sample: testdata/frames.jsonl line 25
 	if f.F.Src != 0x3e01 {
 		t.Fatalf("fixture[24] src = %04x, want 3e01 (fixture order changed?)", f.F.Src)
