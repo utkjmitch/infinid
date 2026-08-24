@@ -85,6 +85,48 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 			rs = counters(reg, owner, p)
 			found = true
 		}
+	case 0x000305:
+		if owner == 0x3e01 && f.Op == bus.OpWrite {
+			rs = airflowCmd(p)
+			found = true
+		}
+	case 0x000306:
+		if owner == 0x3e01 {
+			rs = blowerStatus(p)
+			found = true
+		}
+	case 0x000413:
+		if owner == 0x3e01 {
+			rs = blowerTelemetry(p)
+			found = true
+		}
+	case 0x000308, 0x000319:
+		if owner == 0x6001 {
+			rs = dampers(reg, p)
+			found = true
+		}
+	case 0x00041f:
+		if f.Op == bus.OpWrite {
+			if z := zoneIndex(f.Dst); z != 0 {
+				rs = zoneConfigPush(z, p)
+				found = true
+			}
+		}
+	case 0x00041e:
+		if z := zoneIndex(owner); z != 0 {
+			rs = zoneSensorStatus(z, p)
+			found = true
+		}
+	case 0x000202:
+		if owner == 0xf1f1 {
+			rs = busTime(p)
+			found = true
+		}
+	case 0x000203:
+		if owner == 0xf1f1 {
+			rs = busDate(p)
+			found = true
+		}
 	default:
 		return nil, false
 	}
