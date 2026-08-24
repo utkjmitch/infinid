@@ -43,8 +43,15 @@ func compressorStageCmd(p []byte) []Reading {
 	if len(p) < 5 {
 		return nil
 	}
+	stage := f32(p, 0)
+	// NaN/±Inf are not real commanded-stage values (garbage or a bus
+	// transient) and downstream JSON marshalling errors on them, so drop
+	// the reading rather than publish an unencodable float.
+	if math.IsNaN(stage) || math.IsInf(stage, 0) {
+		return nil
+	}
 	return []Reading{
-		{Field: "compressor_stage_cmd", Value: f32(p, 0)},
+		{Field: "compressor_stage_cmd", Value: stage},
 		{Field: "cool_mode_flag", Value: float64(p[4])},
 	}
 }
@@ -111,8 +118,7 @@ func counterName(reg uint32, owner uint16, key byte) string {
 	return ""
 }
 
-// counters — 000310/000311: rows of key(u8) value(u24 BE) pad(0x00)... —
-// observed row stride is 4 bytes: key + 3-byte value.
+// counters — 000310/000311: rows of key(u8) value(u24 BE), stride 4 bytes.
 func counters(reg uint32, owner uint16, p []byte) []Reading {
 	var rs []Reading
 	for i := 0; i+4 <= len(p); i += 4 {

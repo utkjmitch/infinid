@@ -61,22 +61,30 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 			found = true
 		}
 	case 0x000604:
-		rs = compressorRPM(p)
-		found = true
+		if owner == 0x5201 {
+			rs = compressorRPM(p)
+			found = true
+		}
 	case 0x000605:
-		if f.Op == bus.OpWrite {
+		if owner == 0x5201 && f.Op == bus.OpWrite {
 			rs = compressorStageCmd(p)
 			found = true
 		}
 	case 0x00060e:
-		rs = compressorStage(p)
-		found = true
+		if owner == 0x5201 {
+			rs = compressorStage(p)
+			found = true
+		}
 	case 0x000625:
-		rs = oduAnalog(p)
-		found = true
+		if owner == 0x5201 {
+			rs = oduAnalog(p)
+			found = true
+		}
 	case 0x000310, 0x000311:
-		rs = counters(reg, owner, p)
-		found = true
+		if owner == 0x3e01 || owner == 0x5201 {
+			rs = counters(reg, owner, p)
+			found = true
+		}
 	default:
 		return nil, false
 	}
