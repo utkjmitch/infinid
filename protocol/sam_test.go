@@ -182,6 +182,12 @@ func TestSAMMalformedInput(t *testing.T) {
 			t.Errorf("readings = %d, want 0", len(rs))
 		}
 	})
+	t.Run("3B05 with 10-byte payload (short by 1)", func(t *testing.T) {
+		rs, ok := Decode(samFrame([]byte{0x00, 0x3b, 0x05}, make([]byte, 10)), time.Now())
+		if !ok || len(rs) != 0 {
+			t.Fatalf("short 3B05: ok=%v readings=%d, want ok=true with none", ok, len(rs))
+		}
+	})
 	t.Run("3B03 with 149-byte payload (short by 1)", func(t *testing.T) {
 		rs, ok := Decode(samFrame([]byte{0x00, 0x3b, 0x03}, make([]byte, 149)), time.Now())
 		if !ok {

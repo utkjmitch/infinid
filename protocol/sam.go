@@ -81,9 +81,11 @@ func zoneSettings3B03(p []byte) []Reading {
 		)
 		// hold_remaining_min is emitted unconditionally, including 0, so
 		// state can clear an expired countdown rather than have it linger
-		// from the last nonzero reading. 0xFFFF is infinitesp's
-		// permanent-hold sentinel (not a real minute count) and carries no
-		// countdown to publish, so it alone is skipped.
+		// from the last nonzero reading. 0xFFFF is skipped: infinitesp
+		// normalizes permanent hold to 0xFFFF internally (not a documented
+		// wire value). The documented wire encoding for permanent is
+		// duration <= 1 — indistinguishable here from expired; the
+		// hold_permanent bitmap field is what disambiguates it downstream.
 		if mins := u16(p, 38+2*(z-1)); mins != 0xffff {
 			rs = append(rs, Reading{Zone: z, Field: "hold_remaining_min", Value: float64(mins)})
 		}
@@ -92,10 +94,10 @@ func zoneSettings3B03(p []byte) []Reading {
 }
 
 // accessoryLife3B05 — consumed % at fixed offsets (0 = new, 100 = replace).
-// Provenance: infinitude's own reverse-engineering only ("our own RE, not a
-// Carrier source"); infinitesp mirrors infinitude's layout but adds no
-// independent confirmation; infinitive has no 3B05 support at all. Single
-// source — only the metric-units flag is separately live-verified; the
+// Provenance: two sources (infinitesp REG3B05_* and infinitude SAM.pm), but
+// infinitude self-describes the decode as its own RE rather than a Carrier
+// source, and no derivation between the two is recorded; infinitive has no
+// 3B05 support at all. Only the metric-units flag is separately live-verified; the
 // byte→accessory mapping is unconfirmed until Task 16's live gate.
 func accessoryLife3B05(p []byte) []Reading {
 	if len(p) < 11 {
