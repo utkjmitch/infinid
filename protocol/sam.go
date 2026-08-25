@@ -34,8 +34,12 @@ func systemState3B02(p []byte) []Reading {
 			continue
 		}
 		rs = append(rs,
-			Reading{Zone: z, Field: "temp", Value: float64(p[3+z-1])},
-			Reading{Zone: z, Field: "humidity", Value: float64(p[11+z-1])},
+			// _sam suffix: 00041E already emits passive "temp"/"humidity"
+			// readings for the same zones; suffixing the SAM duplicates keeps
+			// the two sources as distinct state keys instead of colliding
+			// last-writer-wins.
+			Reading{Zone: z, Field: "temp_sam", Value: float64(p[3+z-1])},
+			Reading{Zone: z, Field: "humidity_sam", Value: float64(p[11+z-1])},
 		)
 	}
 	mode := p[22] & 0x0f
@@ -73,21 +77,31 @@ func zoneSettings3B03(p []byte) []Reading {
 		if p[11]&(1<<(z-1)) != 0 {
 			holdPermanent = 1
 		}
+		// _sam suffix: 00041F already emits passive "fan_mode",
+		// "heat_setpoint", "cool_setpoint", and (while a timed hold is
+		// active) "hold_remaining_min" for the same zones; suffixing the
+		// SAM duplicates keeps the two sources as distinct state keys
+		// instead of colliding last-writer-wins.
 		rs = append(rs,
-			Reading{Zone: z, Field: "fan_mode", Value: float64(p[3+z-1]), Text: fanText(p[3+z-1])},
+			Reading{Zone: z, Field: "fan_mode_sam", Value: float64(p[3+z-1]), Text: fanText(p[3+z-1])},
 			Reading{Zone: z, Field: "hold_permanent", Value: holdPermanent},
-			Reading{Zone: z, Field: "heat_setpoint", Value: float64(p[12+z-1])},
-			Reading{Zone: z, Field: "cool_setpoint", Value: float64(p[20+z-1])},
+			Reading{Zone: z, Field: "heat_setpoint_sam", Value: float64(p[12+z-1])},
+			Reading{Zone: z, Field: "cool_setpoint_sam", Value: float64(p[20+z-1])},
 		)
-		// hold_remaining_min is emitted unconditionally, including 0, so
-		// state can clear an expired countdown rather than have it linger
-		// from the last nonzero reading. 0xFFFF is skipped: infinitesp
-		// normalizes permanent hold to 0xFFFF internally (not a documented
-		// wire value). The documented wire encoding for permanent is
-		// duration <= 1 — indistinguishable here from expired; the
-		// hold_permanent bitmap field is what disambiguates it downstream.
+		// hold_remaining_min_sam is emitted unconditionally, including 0.
+		// Since it's a distinct key from 00041F's "hold_remaining_min", this
+		// unconditional emit is correct as-is: an expiring SAM hold clears
+		// its own key by simple overwrite (0 replaces the last nonzero
+		// value) the next time this table is read. The state package's
+		// delete-on-hold=0 rule applies only to the 00041F
+		// "hold_remaining_min" key — SAM no longer touches it. 0xFFFF is
+		// skipped: infinitesp normalizes permanent hold to 0xFFFF internally
+		// (not a documented wire value). The documented wire encoding for
+		// permanent is duration <= 1 — indistinguishable here from expired;
+		// the hold_permanent bitmap field is what disambiguates it
+		// downstream.
 		if mins := u16(p, 38+2*(z-1)); mins != 0xffff {
-			rs = append(rs, Reading{Zone: z, Field: "hold_remaining_min", Value: float64(mins)})
+			rs = append(rs, Reading{Zone: z, Field: "hold_remaining_min_sam", Value: float64(mins)})
 		}
 	}
 	return rs

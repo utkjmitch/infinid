@@ -1,6 +1,7 @@
 package state
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -105,5 +106,127 @@ func TestHoldPermanentDoesNotClearCountdown(t *testing.T) {
 	snap := s.Snapshot(t0)
 	if _, ok := snap.Zones[2]["hold_remaining_min"]; !ok {
 		t.Error("hold_permanent=0 must not clear hold_remaining_min")
+	}
+}
+
+// TestActiveZonesMaskRetraction pins that the active_zones mask is not
+// additive-only: a zone it established itself can be retracted when a later
+// mask clears that bit, but a zone that ever saw real sensor traffic
+// survives — and zone 1 is never removed regardless.
+func TestActiveZonesMaskRetraction(t *testing.T) {
+	s := New()
+	// 0b0111 = zones 1,2,3 (zone 1 default, mask adds 2 and 3 as mask-only).
+	s.Apply(protocol.Reading{Owner: 0x2001, Field: "active_zones", Value: 7, TS: t0})
+	snap := s.Snapshot(t0)
+	if _, ok := snap.Zones[2]; !ok {
+		t.Fatal("mask 0x07 must establish zone 2")
+	}
+	if _, ok := snap.Zones[3]; !ok {
+		t.Fatal("mask 0x07 must establish zone 3")
+	}
+
+	// 0b0011 clears zone 3's bit: zone 3 was mask-only, so it is retracted.
+	s.Apply(protocol.Reading{Owner: 0x2001, Field: "active_zones", Value: 3, TS: t0})
+	snap = s.Snapshot(t0)
+	if _, ok := snap.Zones[3]; ok {
+		t.Error("mask 0x03 must retract mask-only zone 3")
+	}
+	if _, ok := snap.Zones[2]; !ok {
+		t.Error("zone 2 still set in mask 0x03 — must remain")
+	}
+	if _, ok := snap.Zones[1]; !ok {
+		t.Error("zone 1 must never be removed")
+	}
+
+	// Sensor traffic on a zone before the mask retracts it: the zone must
+	// survive even after its bit clears.
+	s.Apply(protocol.Reading{Owner: 0x2201, Zone: 3, Field: "temp", Value: 71, TS: t0})
+	s.Apply(protocol.Reading{Owner: 0x2001, Field: "active_zones", Value: 7, TS: t0}) // re-add 3
+	s.Apply(protocol.Reading{Owner: 0x2001, Field: "active_zones", Value: 3, TS: t0}) // clear 3's bit again
+	snap = s.Snapshot(t0)
+	if _, ok := snap.Zones[3]; !ok {
+		t.Error("zone 3 saw real sensor traffic — must survive mask retraction")
+	}
+}
+
+// TestOutOfOrderGuard pins that Apply never lets an older reading clobber a
+// newer one already stored for the same field — a guard against a future
+// replay/journal feed, since the live bus loop is monotonic today.
+func TestOutOfOrderGuard(t *testing.T) {
+	s := New()
+	newer := t0.Add(1 * time.Minute)
+	s.Apply(protocol.Reading{Field: "supply_cfm", Value: 900, TS: newer})
+	s.Apply(protocol.Reading{Field: "supply_cfm", Value: 500, TS: t0}) // older, out of order
+
+	snap := s.Snapshot(newer)
+	if snap.Sys["supply_cfm"].Value != 900 {
+		t.Errorf("supply_cfm = %v, want 900 (newer value retained)", snap.Sys["supply_cfm"].Value)
+	}
+
+	// Same rule applies to zone-scoped fields.
+	s.Apply(protocol.Reading{Owner: 0x2201, Zone: 2, Field: "temp", Value: 72, TS: newer})
+	s.Apply(protocol.Reading{Owner: 0x2201, Zone: 2, Field: "temp", Value: 68, TS: t0})
+	snap = s.Snapshot(newer)
+	if snap.Zones[2]["temp"].Value != 72 {
+		t.Errorf("zone temp = %v, want 72 (newer value retained)", snap.Zones[2]["temp"].Value)
+	}
+}
+
+// TestConcurrentApplyAndSnapshot exercises the mutex under -race: several
+// goroutines Apply readings while others take Snapshots concurrently.
+// Note: this repo's local `go test -race` needs cgo and may not run here —
+// that's fine, the test still pins correctness (no panics, no lost writes)
+// under plain -run, and adds -race coverage wherever cgo is available (CI).
+func TestConcurrentApplyAndSnapshot(t *testing.T) {
+	s := New()
+	var wg sync.WaitGroup
+
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				s.Apply(protocol.Reading{Owner: 0x2201, Zone: 2, Field: "temp", Value: float64(g*50 + i), TS: t0})
+			}
+		}(g)
+	}
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				_ = s.Snapshot(t0.Add(time.Duration(i) * time.Second))
+			}
+		}()
+	}
+	wg.Wait()
+
+	snap := s.Snapshot(t0)
+	if _, ok := snap.Zones[2]["temp"]; !ok {
+		t.Error("concurrent Apply calls must leave a temp reading in zone 2")
+	}
+}
+
+// TestSnapshotIsDeepCopy pins that mutating a returned Snapshot's maps
+// (including inserting a brand-new zone key) never reaches back into State.
+func TestSnapshotIsDeepCopy(t *testing.T) {
+	s := New()
+	s.Apply(protocol.Reading{Field: "supply_cfm", Value: 500, TS: t0})
+	s.Apply(protocol.Reading{Owner: 0x2201, Zone: 2, Field: "temp", Value: 72, TS: t0})
+
+	snap := s.Snapshot(t0)
+	snap.Sys["supply_cfm"] = Field{Value: 999, TS: t0}
+	snap.Zones[2]["temp"] = Field{Value: 999, TS: t0}
+	snap.Zones[5] = map[string]Field{"temp": {Value: 999, TS: t0}} // new zone key
+
+	fresh := s.Snapshot(t0)
+	if fresh.Sys["supply_cfm"].Value != 500 {
+		t.Errorf("sys mutation leaked into State: %+v", fresh.Sys["supply_cfm"])
+	}
+	if fresh.Zones[2]["temp"].Value != 72 {
+		t.Errorf("zone mutation leaked into State: %+v", fresh.Zones[2]["temp"])
+	}
+	if _, ok := fresh.Zones[5]; ok {
+		t.Error("inserting a zone key into a Snapshot must not create it in State")
 	}
 }

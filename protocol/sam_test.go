@@ -35,13 +35,13 @@ func TestSystemState3B02(t *testing.T) {
 			byKey[r.Field] = r
 		}
 	}
-	if byKey["temp1"].Value != 74 || byKey["temp3"].Value != 70 {
+	if byKey["temp_sam1"].Value != 74 || byKey["temp_sam3"].Value != 70 {
 		t.Errorf("zone temps wrong: %+v", byKey)
 	}
-	if byKey["humidity1"].Value != 55 || byKey["humidity3"].Value != 57 {
+	if byKey["humidity_sam1"].Value != 55 || byKey["humidity_sam3"].Value != 57 {
 		t.Errorf("zone humidity wrong: %+v", byKey)
 	}
-	if _, exists := byKey["temp4"]; exists {
+	if _, exists := byKey["temp_sam4"]; exists {
 		t.Error("zone 4 not in active_zones bitmask — must not decode")
 	}
 	if byKey["active_zones"].Value != 7 {
@@ -79,28 +79,27 @@ func TestZoneSettings3B03(t *testing.T) {
 	for _, r := range rs {
 		got[r.Field+string(rune('0'+r.Zone))] = r
 	}
-	if got["heat_setpoint1"].Value != 68 || got["heat_setpoint3"].Value != 66 {
+	if got["heat_setpoint_sam1"].Value != 68 || got["heat_setpoint_sam3"].Value != 66 {
 		t.Errorf("heat setpoints: %+v", got)
 	}
-	if got["cool_setpoint3"].Value != 75 {
-		t.Errorf("cool setpoint z3: %+v", got["cool_setpoint3"])
+	if got["cool_setpoint_sam3"].Value != 75 {
+		t.Errorf("cool setpoint z3: %+v", got["cool_setpoint_sam3"])
 	}
-	if got["fan_mode3"].Text != "med" {
-		t.Errorf("fan z3 = %q, want med", got["fan_mode3"].Text)
+	if got["fan_mode_sam3"].Text != "med" {
+		t.Errorf("fan z3 = %q, want med", got["fan_mode_sam3"].Text)
 	}
 	if got["hold_permanent1"].Value != 0 || got["hold_permanent3"].Value != 1 {
 		t.Errorf("holds: %+v", got)
 	}
-	if got["hold_remaining_min1"].Value != 647 {
-		t.Errorf("hold duration z1 = %v, want 647", got["hold_remaining_min1"].Value)
+	if got["hold_remaining_min_sam1"].Value != 647 {
+		t.Errorf("hold duration z1 = %v, want 647", got["hold_remaining_min_sam1"].Value)
 	}
-	// Zone 3 is holding but has no duration byte set — hold_remaining_min
-	// must still be emitted (unconditional, so state can clear an expired
-	// countdown), with value 0.
-	if r, exists := got["hold_remaining_min3"]; !exists || r.Value != 0 {
-		t.Errorf("hold_remaining_min3 = %+v exists=%v, want present with value 0", r, exists)
+	// Zone 3 is holding but has no duration byte set — hold_remaining_min_sam
+	// must still be emitted (unconditional pin), with value 0.
+	if r, exists := got["hold_remaining_min_sam3"]; !exists || r.Value != 0 {
+		t.Errorf("hold_remaining_min_sam3 = %+v exists=%v, want present with value 0", r, exists)
 	}
-	if _, exists := got["heat_setpoint2"]; exists {
+	if _, exists := got["heat_setpoint_sam2"]; exists {
 		t.Error("zone 2 absent from bitmask — must not decode")
 	}
 }
