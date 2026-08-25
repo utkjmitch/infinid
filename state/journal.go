@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -40,14 +42,16 @@ const (
 
 // Journal tracks liveness/faults and appends events to a JSONL file.
 type Journal struct {
-	mu        sync.Mutex
-	f         *os.File
-	w         *bufio.Writer
-	lastSeen  map[uint16]time.Time
-	lost      map[uint16]bool
-	busSilent bool
-	counters  map[string]float64        // last journaled power counters
-	faults    map[string]protocol.Fault // key: code/source/first-time
+	mu         sync.Mutex
+	f          *os.File
+	w          *bufio.Writer
+	lastSeen   map[uint16]time.Time
+	lost       map[uint16]bool
+	busSilent  bool
+	firstCheck time.Time                 // first CheckLiveness call while lastSeen is still empty
+	counters   map[string]float64        // last journaled power counters
+	faults     map[string]protocol.Fault // key: code/source/first-time
+	err        error                     // first Write/Flush error encountered while journaling
 }
 
 // OpenJournal opens (or creates) the journal at path, replaying existing
@@ -69,17 +73,17 @@ func OpenJournal(path string) (*Journal, error) {
 			if e.Type == "power_counters" {
 				j.counters = e.Values
 			}
-			if e.Type == "fault_seen" && e.Fault != nil {
-				var source byte
-				if v, err := strconv.ParseUint(e.Fault.Source, 16, 8); err == nil {
-					source = byte(v)
+			if e.Fault != nil {
+				switch e.Type {
+				case "fault_seen", "fault_recurred", "fault_cleared":
+					// Mirror live NoteFaults: a cleared fault stays in the
+					// known-fault set with Active:false, it is not deleted —
+					// only a full history wipe removes an entry.
+					f := faultFromRecord(e.Fault)
+					j.faults[faultKey(f)] = f
+				case "fault_history_wiped":
+					delete(j.faults, faultKey(protocol.Fault{Code: e.Fault.Code, Time: e.Fault.Time}))
 				}
-				f := protocol.Fault{Code: e.Fault.Code, Source: source, Time: e.Fault.Time,
-					Count: e.Fault.Count, Active: e.Fault.Active}
-				j.faults[faultKey(f)] = f
-			}
-			if (e.Type == "fault_cleared" || e.Type == "fault_history_wiped") && e.Fault != nil {
-				delete(j.faults, faultKey(protocol.Fault{Code: e.Fault.Code, Time: e.Fault.Time}))
 			}
 		}
 		existing.Close()
@@ -92,20 +96,53 @@ func OpenJournal(path string) (*Journal, error) {
 	return j, nil
 }
 
+// faultFromRecord reconstructs a protocol.Fault from its journaled form,
+// parsing the two-hex-digit Source string back to a byte (parse errors are
+// ignored, leaving Source at 0 — the journal predates the current daemon or
+// was hand-edited; faultKey doesn't depend on Source so identity is intact).
+func faultFromRecord(r *FaultRecord) protocol.Fault {
+	var source byte
+	if v, err := strconv.ParseUint(r.Source, 16, 8); err == nil {
+		source = byte(v)
+	}
+	return protocol.Fault{Code: r.Code, Source: source, Time: r.Time, Count: r.Count, Active: r.Active}
+}
+
 func faultKey(f protocol.Fault) string {
 	return fmt.Sprintf("%d/%s", f.Code, f.Time.Format(time.RFC3339))
 }
 
+// append marshals and writes e, recording (but not logging — see Err) the
+// first Write/Flush error encountered. This package never logs: journaling
+// degrades silently at the write layer, and the daemon is expected to
+// surface Err() to whatever channel it uses.
 func (j *Journal) append(e Event) {
 	line, _ := json.Marshal(e)
-	j.w.Write(append(line, '\n'))
-	j.w.Flush()
+	if _, err := j.w.Write(append(line, '\n')); err != nil {
+		if j.err == nil {
+			j.err = err
+		}
+		return
+	}
+	if err := j.w.Flush(); err != nil {
+		if j.err == nil {
+			j.err = err
+		}
+	}
 }
 
 // NoteDevice records that addr produced a frame at now.
 func (j *Journal) NoteDevice(addr uint16, now time.Time) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.noteLocked(addr, now)
+}
+
+// noteLocked is NoteDevice's body, callable while j.mu is already held.
+// CheckLiveness routes activeNow entries through this so bus_recovered and
+// device_recovered fire uniformly whether a device is heard via a direct
+// NoteDevice call or via the activeNow list on the next liveness pass.
+func (j *Journal) noteLocked(addr uint16, now time.Time) {
 	if j.busSilent {
 		j.busSilent = false
 		j.append(Event{TS: now, Type: "bus_recovered"})
@@ -126,7 +163,21 @@ func (j *Journal) CheckLiveness(now time.Time, activeNow []uint16) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, a := range activeNow {
-		j.lastSeen[a] = now
+		j.noteLocked(a, now)
+	}
+	if len(j.lastSeen) == 0 {
+		// Nothing has ever been heard: there is no "silent since" timestamp
+		// to compare against, so arm one on the first call and only declare
+		// bus_silent once busSilentAfter has elapsed since then.
+		if j.firstCheck.IsZero() {
+			j.firstCheck = now
+			return
+		}
+		if !j.busSilent && now.Sub(j.firstCheck) > busSilentAfter {
+			j.busSilent = true
+			j.append(Event{TS: now, Type: "bus_silent"})
+		}
+		return
 	}
 	newest := time.Time{}
 	for _, ts := range j.lastSeen {
@@ -158,26 +209,40 @@ func (j *Journal) BusSilent() bool {
 }
 
 // NotePowerCounters journals the power-on cycle counters when they change —
-// the reference values ClassifyGap compares against after a restart.
+// the reference values ClassifyGap compares against after a restart. vals
+// must be the complete counter reference set; partial updates are not
+// merged against the prior snapshot, so a key missing here is treated as
+// having dropped out (a change), not as "leave it alone".
 func (j *Journal) NotePowerCounters(vals map[string]float64, now time.Time) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	changed := len(j.counters) != len(vals)
-	for k, v := range vals {
-		if j.counters[k] != v {
-			changed = true
+	if !changed {
+		for k, v := range vals {
+			if j.counters[k] != v {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		for k, v := range j.counters {
+			if vals[k] != v {
+				changed = true
+				break
+			}
 		}
 	}
 	if !changed {
 		return
 	}
-	j.counters = vals
+	j.counters = maps.Clone(vals)
 	j.append(Event{TS: now, Type: "power_counters", Values: vals})
 }
 
 // ClassifyGap runs once per daemon start, after the first counter readings
 // arrive: unchanged counters → the HVAC ran fine unobserved
-// (monitoring_gap); a bumped counter → the HVAC lost power during the gap
+// (monitoring_gap); a changed counter → the HVAC lost power during the gap
 // (hvac_power_loss). With no prior reference, the gap is unclassifiable.
 // IDU counters commit on a ~daily rollup (08-23 longitudinal finding), so an
 // HVAC power loss can be classified as monitoring_gap if it happened since
@@ -192,7 +257,11 @@ func (j *Journal) ClassifyGap(vals map[string]float64, now time.Time) {
 	}
 	gap := "monitoring_gap"
 	for k, v := range vals {
-		if prev, ok := j.counters[k]; ok && v > prev {
+		// A decrease is also evidence of a power event (counter wrap or a
+		// board swap), not just an increase — either direction gets the
+		// same hvac_power_loss classification; there is no separate
+		// vocabulary for which way the counter moved.
+		if prev, ok := j.counters[k]; ok && v != prev {
 			gap = "hvac_power_loss"
 		}
 	}
@@ -209,9 +278,7 @@ func (j *Journal) NoteFaults(current []protocol.Fault, now time.Time) {
 	defer j.mu.Unlock()
 	if len(current) == 0 && len(j.faults) > 0 {
 		for _, f := range j.faults {
-			j.append(Event{TS: now, Type: "fault_history_wiped", Fault: &FaultRecord{
-				Code: f.Code, Time: f.Time, Count: f.Count,
-				Resolution: "manually_cleared"}})
+			j.append(Event{TS: now, Type: "fault_history_wiped", Fault: recordOf(f, "manually_cleared")})
 		}
 		j.faults = map[string]protocol.Fault{}
 		return
@@ -238,7 +305,7 @@ func recordOf(f protocol.Fault, resolution string) *FaultRecord {
 		Time: f.Time, Count: f.Count, Active: f.Active, Resolution: resolution}
 }
 
-// ActiveFaults returns the currently-active known faults (unordered).
+// ActiveFaults returns the currently-active known faults, newest first.
 func (j *Journal) ActiveFaults() []protocol.Fault {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -248,13 +315,31 @@ func (j *Journal) ActiveFaults() []protocol.Fault {
 			out = append(out, f)
 		}
 	}
+	sort.Slice(out, func(i, k int) bool { return out[i].Time.After(out[k].Time) })
 	return out
 }
 
-// Close flushes and closes the journal file.
+// Err returns the first Write/Flush error encountered while journaling, if
+// any. This package never logs; the daemon is responsible for surfacing
+// this to whatever channel it uses.
+func (j *Journal) Err() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.err
+}
+
+// Close flushes and closes the journal file. A journaling error recorded
+// earlier (see Err) takes priority over the file-close error, since it is
+// the more actionable signal that events were lost.
 func (j *Journal) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.w.Flush()
-	return j.f.Close()
+	if err := j.w.Flush(); err != nil && j.err == nil {
+		j.err = err
+	}
+	closeErr := j.f.Close()
+	if j.err != nil {
+		return j.err
+	}
+	return closeErr
 }
