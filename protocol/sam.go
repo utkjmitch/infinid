@@ -7,22 +7,28 @@ import (
 )
 
 // SAM-served registers (wall control replies to an active 0x92 reader).
-// Layouts per prior art — infinitive/infinitesp/infinitude agree on every
-// offset used here; live-validated before the SAM scheduler ships enabled.
+// Provenance varies by table — see each decoder's comment. All of them are
+// live-validated (Task 16) before the SAM scheduler ships enabled, but the
+// number of independent sources behind each layout differs, and that
+// difference belongs in the code, not just the plan doc.
 
 // modeNames — 3B02 byte 22 low nibble. Values 0-2 agree across all
 // sources; 3+ conflict between source generations, so they decode to the
 // raw value with Text "unknown" until live-verified.
 var modeNames = []string{"heat", "cool", "auto"}
 
-// systemState3B02 — active_zones(0), temps u8[8]@3, RH u8[8]@11, OAT i8@20,
-// stage/mode@22, minutes-since-midnight u16@26.
+// systemState3B02 — active_zones(0), metric_units(1), temps u8[8]@3,
+// RH u8[8]@11, OAT i8@20, stage/mode@22, minutes-since-midnight u16@26.
+// Verified: infinitive/infinitesp/infinitude agree on every offset used here.
 func systemState3B02(p []byte) []Reading {
 	if len(p) < 29 {
 		return nil
 	}
 	zones := p[0]
-	rs := []Reading{{Field: "active_zones", Value: float64(zones)}}
+	rs := []Reading{
+		{Field: "active_zones", Value: float64(zones)},
+		{Field: "metric_units", Value: float64(p[1])}, // 0=°F 1=°C; lets downstream detect °C systems
+	}
 	for z := 1; z <= 8; z++ {
 		if zones&(1<<(z-1)) == 0 {
 			continue
@@ -47,6 +53,7 @@ func systemState3B02(p []byte) []Reading {
 
 // zoneSettings3B03 — fan u8[8]@3, holding bitmap@11, heat u8[8]@12,
 // cool u8[8]@20, hold-duration-minutes u16 BE ×8 @38.
+// Verified: infinitive/infinitesp/infinitude agree on every offset used here.
 func zoneSettings3B03(p []byte) []Reading {
 	if len(p) < 150 {
 		return nil
@@ -57,17 +64,27 @@ func zoneSettings3B03(p []byte) []Reading {
 		if zones&(1<<(z-1)) == 0 {
 			continue
 		}
-		hold := 0.0
+		// hold_permanent — the 3B03 holding bitmap, distinct from 00041F's
+		// timed "hold": on Touch this bit means a *permanent* hold, not a
+		// countdown. Naming it separately from zoneConfigPush's "hold" keeps
+		// the two concepts as distinct HA entities downstream instead of
+		// colliding last-writer-wins in state.
+		holdPermanent := 0.0
 		if p[11]&(1<<(z-1)) != 0 {
-			hold = 1
+			holdPermanent = 1
 		}
 		rs = append(rs,
 			Reading{Zone: z, Field: "fan_mode", Value: float64(p[3+z-1]), Text: fanText(p[3+z-1])},
-			Reading{Zone: z, Field: "hold", Value: hold},
+			Reading{Zone: z, Field: "hold_permanent", Value: holdPermanent},
 			Reading{Zone: z, Field: "heat_setpoint", Value: float64(p[12+z-1])},
 			Reading{Zone: z, Field: "cool_setpoint", Value: float64(p[20+z-1])},
 		)
-		if mins := u16(p, 38+2*(z-1)); mins > 0 {
+		// hold_remaining_min is emitted unconditionally, including 0, so
+		// state can clear an expired countdown rather than have it linger
+		// from the last nonzero reading. 0xFFFF is infinitesp's
+		// permanent-hold sentinel (not a real minute count) and carries no
+		// countdown to publish, so it alone is skipped.
+		if mins := u16(p, 38+2*(z-1)); mins != 0xffff {
 			rs = append(rs, Reading{Zone: z, Field: "hold_remaining_min", Value: float64(mins)})
 		}
 	}
@@ -75,8 +92,13 @@ func zoneSettings3B03(p []byte) []Reading {
 }
 
 // accessoryLife3B05 — consumed % at fixed offsets (0 = new, 100 = replace).
+// Provenance: infinitude's own reverse-engineering only ("our own RE, not a
+// Carrier source"); infinitesp mirrors infinitude's layout but adds no
+// independent confirmation; infinitive has no 3B05 support at all. Single
+// source — only the metric-units flag is separately live-verified; the
+// byte→accessory mapping is unconfirmed until Task 16's live gate.
 func accessoryLife3B05(p []byte) []Reading {
-	if len(p) < 7 {
+	if len(p) < 11 {
 		return nil
 	}
 	return []Reading{
@@ -96,14 +118,24 @@ type Fault struct {
 	Count  int
 }
 
-// faultEpoch — 4202 day counts are days since 2013-01-01 (nonstandard,
-// verified against cloud equipment_events by prior art).
-var faultEpoch = time.Date(2013, 1, 1, 0, 0, 0, 0, time.Local)
+// faultEpochUTC — 4202 day counts are days since 2013-01-01 (nonstandard,
+// verified against cloud equipment_events by prior art: two sources,
+// infinitesp + infinitude). Day math is done in UTC and only converted to
+// the caller's zone for the final wall-clock assembly, so a day boundary
+// never shifts under a zone with a midnight DST transition (e.g.
+// America/Santiago) the way it would if AddDate ran in local time.
+var faultEpochUTC = time.Date(2013, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // DecodeFaults parses a 4202 fault-history reply: 10 entries × 7 bytes,
-// newest first; 70 or 72 byte payloads observed (entries at the tail).
-// ok=false when f is not a 4202 reply or holds no entries.
-func DecodeFaults(f bus.Frame) ([]Fault, bool) {
+// newest first; 70 or 72 byte payloads observed (entries at the tail — see
+// below). ok=false when f is not a 4202 reply or holds no entries.
+//
+// loc controls the zone the entry timestamps are assembled in; a nil loc
+// defaults to time.Local.
+func DecodeFaults(f bus.Frame, loc *time.Location) ([]Fault, bool) {
+	if loc == nil {
+		loc = time.Local
+	}
 	if f.Op != bus.OpAck06 || len(f.Data) < 3+70 {
 		return nil, false
 	}
@@ -111,7 +143,11 @@ func DecodeFaults(f bus.Frame) ([]Fault, bool) {
 		return nil, false
 	}
 	p := f.Data[3:]
-	p = p[len(p)-70:] // entries occupy the final 70 bytes
+	// Tail-anchor assumption: on the one payload length seen (72 bytes) the
+	// two leading bytes precede the entry table; prior art, no local
+	// capture behind it. Confirm at the Task 16 live gate before trusting
+	// this on a real 72-byte reply.
+	p = p[len(p)-70:]
 	var out []Fault
 	for i := 0; i+7 <= len(p); i += 7 {
 		e := p[i : i+7]
@@ -119,11 +155,15 @@ func DecodeFaults(f bus.Frame) ([]Fault, bool) {
 		if e[0] == 0 && e[1] == 0 && days == 0 {
 			continue // empty slot
 		}
-		day := faultEpoch.AddDate(0, 0, days)
+		hour, min := int(e[2]), int(e[3])
+		if hour > 23 || min > 59 {
+			continue // half-corrupt slot: time.Date would silently normalize this
+		}
+		day := faultEpochUTC.AddDate(0, 0, days)
 		out = append(out, Fault{
 			Code:   int(e[0]),
 			Source: e[1],
-			Time:   time.Date(day.Year(), day.Month(), day.Day(), int(e[2]), int(e[3]), 0, 0, time.Local),
+			Time:   time.Date(day.Year(), day.Month(), day.Day(), hour, min, 0, 0, loc),
 			Active: e[6]&0x80 == 0, // bit 7 INVERTED: 0 = active
 			Count:  int(e[6] & 0x7f),
 		})

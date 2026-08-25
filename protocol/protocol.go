@@ -135,18 +135,29 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 			found = true
 		}
 	case 0x003b02:
-		if owner == bus.DevWallControl {
+		if owner == bus.DevWallControl && f.Op == bus.OpAck06 {
 			rs = systemState3B02(p)
 			found = true
 		}
 	case 0x003b03:
-		if owner == bus.DevWallControl {
+		if owner == bus.DevWallControl && f.Op == bus.OpAck06 {
 			rs = zoneSettings3B03(p)
 			found = true
 		}
 	case 0x003b05:
-		if owner == bus.DevWallControl {
+		if owner == bus.DevWallControl && f.Op == bus.OpAck06 {
 			rs = accessoryLife3B05(p)
+			found = true
+		}
+	case 0x004202:
+		// 4202 (fault history) readings come from DecodeFaults, not this
+		// switch — Fault isn't a Reading (it has no single Value/Text), so
+		// there's nothing to assign to rs. This case exists only so a
+		// verified 4202 reply is marked found=true instead of falling into
+		// the undecodable default, which would make callers that tally
+		// Decode's ok=false count live fault-history replies as archived
+		// garbage. See DecodeFaults for the actual parse.
+		if owner == bus.DevWallControl && f.Op == bus.OpAck06 {
 			found = true
 		}
 	default:

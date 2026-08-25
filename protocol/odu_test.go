@@ -191,6 +191,11 @@ func TestUndecodedOwnerNotOK(t *testing.T) {
 			f: bus.Frame{Src: 0x6001, Dst: 0x2001, Op: bus.OpAck06,
 				Data: []byte{0x00, 0x03, 0x08, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
 		},
+		{
+			name: "3B03 OpWrite to 2001",
+			f: bus.Frame{Src: 0x9201, Dst: 0x2001, Op: bus.OpWrite,
+				Data: append([]byte{0x00, 0x3b, 0x03}, make([]byte, 150)...)},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
