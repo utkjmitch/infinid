@@ -134,6 +134,21 @@ func Decode(f bus.Frame, ts time.Time) ([]Reading, bool) {
 			rs = busDate(p)
 			found = true
 		}
+	case 0x003b02:
+		if owner == bus.DevWallControl {
+			rs = systemState3B02(p)
+			found = true
+		}
+	case 0x003b03:
+		if owner == bus.DevWallControl {
+			rs = zoneSettings3B03(p)
+			found = true
+		}
+	case 0x003b05:
+		if owner == bus.DevWallControl {
+			rs = accessoryLife3B05(p)
+			found = true
+		}
 	default:
 		return nil, false
 	}
