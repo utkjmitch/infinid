@@ -147,6 +147,22 @@ func TestActiveZonesMaskRetraction(t *testing.T) {
 	if _, ok := snap.Zones[3]; !ok {
 		t.Error("zone 3 saw real sensor traffic — must survive mask retraction")
 	}
+
+	// Zone 1 is never removed, even by a mask that clears its bit.
+	s.Apply(protocol.Reading{Owner: 0x2001, Field: "active_zones", Value: 6, TS: t0})
+	if _, ok := s.Snapshot(t0).Zones[1]; !ok {
+		t.Error("zone 1 must survive a mask that clears bit 0")
+	}
+
+	// A mask-only zone holding only damper data is retracted WITH its
+	// damper reading — dampers don't establish a zone, so they don't
+	// preserve one either (recorded choice, not an accident).
+	s.Apply(protocol.Reading{Owner: 0x2001, Field: "active_zones", Value: 0x0e, TS: t0}) // adds zone 4 mask-only (bits 2,3,4... 0x0e = zones 2,3,4)
+	s.Apply(protocol.Reading{Owner: 0x6001, Zone: 4, Field: "damper_position", Value: 7, TS: t0})
+	s.Apply(protocol.Reading{Owner: 0x2001, Field: "active_zones", Value: 6, TS: t0}) // clears zone 4's bit
+	if _, ok := s.Snapshot(t0).Zones[4]; ok {
+		t.Error("damper-only mask zone must be retracted, damper data included")
+	}
 }
 
 // TestOutOfOrderGuard pins that Apply never lets an older reading clobber a

@@ -130,6 +130,10 @@ func (s *State) applyActiveZonesMask(mask int) {
 			}
 			continue
 		}
+		// z != 1 is belt-and-braces: maskOnly[1] is unreachable today
+		// (zones[1] exists from New(), so the mask path never marks it),
+		// but the guard keeps zone 1 safe if a future replay/journal feed
+		// constructs zones without going through New().
 		if z != 1 && s.maskOnly[z] {
 			delete(s.zones, z)
 			delete(s.maskOnly, z)
