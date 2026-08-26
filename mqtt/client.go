@@ -2,11 +2,23 @@ package mqtt
 
 import (
 	"fmt"
+	"log"
 	"sync/atomic"
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
 )
+
+// pahoLogger adapts the standard logger to paho's Logger interface. paho's
+// package-level loggers default to no-ops, which combined with the tolerant
+// Connect below would make a rejected CONNACK (bad credentials, DNS failure)
+// completely silent: paho retries it forever, the connect token never
+// completes, and nothing is ever printed. Wiring ERROR/CRITICAL here is what
+// keeps a misconfigured broker diagnosable from the daemon log.
+type pahoLogger struct{ prefix string }
+
+func (l pahoLogger) Println(v ...interface{})               { log.Println(append([]interface{}{l.prefix}, v...)...) }
+func (l pahoLogger) Printf(format string, v ...interface{}) { log.Printf(l.prefix+" "+format, v...) }
 
 // PahoPublisher adapts an eclipse/paho client to the Publisher seam, with
 // LWT ("offline" retained on the availability topic), auto-reconnect, and
@@ -34,6 +46,8 @@ type PahoPublisher struct {
 // token that completes with an actual error (as opposed to timing out) is
 // surfaced here.
 func Connect(broker, user, pass, clientID, availabilityTopic string) (*PahoPublisher, error) {
+	paho.ERROR = pahoLogger{prefix: "mqtt[error]"}
+	paho.CRITICAL = pahoLogger{prefix: "mqtt[critical]"}
 	pp := &PahoPublisher{}
 	opts := paho.NewClientOptions().
 		AddBroker(broker).
