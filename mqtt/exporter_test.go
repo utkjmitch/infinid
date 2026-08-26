@@ -3,6 +3,7 @@ package mqtt
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,5 +299,58 @@ func TestPublishAvailabilityReturnsError(t *testing.T) {
 	e := New(&errPub{err: wantErr}, testConfig())
 	if err := e.PublishAvailability(true); err != wantErr {
 		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+}
+
+func TestFaultAndHealthEntities(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	e.PublishDiscovery(nil)
+	for _, id := range []string{"infinid_last_fault", "infinid_fault_count", "infinid_frames_per_min", "infinid_unknown_frames"} {
+		if len(p.msgs["homeassistant/sensor/"+id+"/config"]) == 0 {
+			t.Errorf("no discovery for %s", id)
+		}
+	}
+	for _, id := range []string{"infinid_fault_active", "infinid_bus_online"} {
+		if len(p.msgs["homeassistant/binary_sensor/"+id+"/config"]) == 0 {
+			t.Errorf("no discovery for binary_sensor %s", id)
+		}
+	}
+	e.PublishHealth(Health{FramesPerMin: 1500, UnknownFrames: 12, SAMFailures: 0,
+		BusOnline: true, FaultCount: 2, LastFault: "171 @ 2026-07-28 09:16 (x1)", FaultActive: false}, t0)
+	if got := p.msgs["infinid/frames_per_min/state"]; len(got) != 1 || got[0] != "1500" {
+		t.Errorf("frames_per_min = %v", got)
+	}
+	if got := p.msgs["infinid/bus_online/state"]; len(got) != 1 || got[0] != "ON" {
+		t.Errorf("bus_online = %v", got)
+	}
+	if got := p.msgs["infinid/last_fault/state"]; len(got) != 1 || !strings.Contains(got[0], "171") {
+		t.Errorf("last_fault = %v", got)
+	}
+}
+
+// TestHealthNotRetractedByPublishState pins the amendment fixing a collision
+// between PublishHealth and PublishState's absent-field retraction pass:
+// health topics live in their own change-detection map so a subsequent
+// PublishState call (which only knows about state.Snapshot fields) must not
+// see health topics as "produced by nobody" and retract them to "None".
+func TestHealthNotRetractedByPublishState(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	snap := snapWith(map[string]state.Field{
+		"suction_pressure": {Value: 121, TS: t0},
+	}, nil)
+	e.PublishState(snap, t0)
+	e.PublishHealth(Health{FramesPerMin: 1500, UnknownFrames: 12, SAMFailures: 0,
+		BusOnline: true, FaultCount: 2, LastFault: "171 @ 2026-07-28 09:16 (x1)", FaultActive: false}, t0)
+	// A second PublishState call must not touch the health topics at all.
+	e.PublishState(snap, t0.Add(time.Second))
+	topic := "infinid/bus_online/state"
+	got := p.msgs[topic]
+	if len(got) != 1 {
+		t.Fatalf("bus_online payload history = %v, want exactly one entry", got)
+	}
+	if got[0] != "ON" {
+		t.Fatalf("bus_online payload = %v, want [ON]", got)
 	}
 }

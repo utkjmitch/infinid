@@ -82,3 +82,18 @@ var zoneEntities = []entityDef{
 	{field: "hold_remaining_min", object: "zone_%s_hold_remaining", name: "Hold remaining", unit: "min", transform: round0},
 	{field: "damper_position", object: "damper_%s", name: "Damper", unit: "%", stateClass: "measurement", transform: pct15},
 }
+
+// healthEntities publish on the hub device; binary sensors carry a
+// distinct discovery component.
+var healthEntities = []entityDef{
+	{field: "last_fault", object: "last_fault", name: "Last fault", text: true},
+	{field: "fault_count", object: "fault_count", name: "Fault count", stateClass: "total_increasing"},
+	{field: "frames_per_min", object: "frames_per_min", name: "Bus frames/min"},
+	{field: "unknown_frames", object: "unknown_frames", name: "Unknown frames", stateClass: "total_increasing"},
+	{field: "sam_failures", object: "sam_failures", name: "SAM read failures", stateClass: "total_increasing"},
+}
+
+var binaryEntities = []entityDef{
+	{field: "fault_active", object: "fault_active", name: "Fault active", deviceClass: "problem"},
+	{field: "bus_online", object: "bus_online", name: "Bus online", deviceClass: "connectivity"},
+}

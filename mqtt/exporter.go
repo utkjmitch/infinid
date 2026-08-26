@@ -39,13 +39,17 @@ type Exporter struct {
 	cfg        Config
 	discovered map[string]bool   // object ids with discovery published
 	last       map[string]string // state topic → last payload
-	lastBeat   time.Time
+	lastHealth map[string]string // health state topic → last payload; kept
+	// separate from last so PublishState's absent-field retraction pass
+	// (which only knows about state.Snapshot fields) never sees health
+	// topics as unproduced and retracts them to "None".
+	lastBeat time.Time
 }
 
 // New builds an Exporter.
 func New(p Publisher, cfg Config) *Exporter {
 	return &Exporter{p: p, cfg: cfg,
-		discovered: map[string]bool{}, last: map[string]string{}}
+		discovered: map[string]bool{}, last: map[string]string{}, lastHealth: map[string]string{}}
 }
 
 func (e *Exporter) zoneName(z int) string {
@@ -80,17 +84,23 @@ func (e *Exporter) zoneDevice(z int) map[string]any {
 // when new zones appear.
 func (e *Exporter) PublishDiscovery(zones []int) {
 	for _, def := range sysEntities {
-		e.publishConfig(def, def.object, e.hubDevice())
+		e.publishConfig(def, def.object, e.hubDevice(), "sensor")
+	}
+	for _, def := range healthEntities {
+		e.publishConfig(def, def.object, e.hubDevice(), "sensor")
+	}
+	for _, def := range binaryEntities {
+		e.publishConfig(def, def.object, e.hubDevice(), "binary_sensor")
 	}
 	for _, z := range zones {
 		for _, def := range zoneEntities {
 			object := fmt.Sprintf(def.object, e.zoneName(z))
-			e.publishConfig(def, object, e.zoneDevice(z))
+			e.publishConfig(def, object, e.zoneDevice(z), "sensor")
 		}
 	}
 }
 
-func (e *Exporter) publishConfig(def entityDef, object string, device map[string]any) {
+func (e *Exporter) publishConfig(def entityDef, object string, device map[string]any, component string) {
 	id := "infinid_" + object
 	if e.discovered[id] {
 		return
@@ -113,7 +123,7 @@ func (e *Exporter) publishConfig(def entityDef, object string, device map[string
 		cfg["state_class"] = def.stateClass
 	}
 	payload, _ := json.Marshal(cfg)
-	topic := fmt.Sprintf("%s/sensor/%s/config", e.cfg.DiscoveryPrefix, id)
+	topic := fmt.Sprintf("%s/%s/%s/config", e.cfg.DiscoveryPrefix, component, id)
 	if e.p.Publish(topic, payload, true) == nil {
 		e.discovered[id] = true
 	}
@@ -176,6 +186,49 @@ func (e *Exporter) publishField(def entityDef, object string, f state.Field, bea
 		e.last[topic] = payload
 	}
 	return topic
+}
+
+// Health is the daemon's own vitals, published alongside decoded state.
+type Health struct {
+	FramesPerMin  float64
+	UnknownFrames float64
+	SAMFailures   float64
+	BusOnline     bool
+	FaultActive   bool
+	FaultCount    float64
+	LastFault     string
+}
+
+// PublishHealth publishes daemon vitals and fault summary entities. It uses
+// its own change-detection map (lastHealth), distinct from the state topic
+// map (last) that PublishState's absent-field retraction pass sweeps —
+// health fields are always present so they need no retraction, and sharing
+// the map would cause PublishState to retract every health topic to "None"
+// on its next call.
+func (e *Exporter) PublishHealth(h Health, now time.Time) {
+	pub := func(object, payload string) {
+		topic := fmt.Sprintf("%s/%s/state", e.cfg.BaseTopic, object)
+		if e.lastHealth[topic] == payload {
+			return
+		}
+		if e.p.Publish(topic, []byte(payload), true) == nil {
+			e.lastHealth[topic] = payload
+		}
+	}
+	num := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+	onoff := func(b bool) string {
+		if b {
+			return "ON"
+		}
+		return "OFF"
+	}
+	pub("frames_per_min", num(h.FramesPerMin))
+	pub("unknown_frames", num(h.UnknownFrames))
+	pub("sam_failures", num(h.SAMFailures))
+	pub("fault_count", num(h.FaultCount))
+	pub("last_fault", h.LastFault)
+	pub("fault_active", onoff(h.FaultActive))
+	pub("bus_online", onoff(h.BusOnline))
 }
 
 // PublishAvailability publishes the retained availability flag. Bus
