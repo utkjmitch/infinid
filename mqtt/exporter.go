@@ -35,21 +35,39 @@ const heartbeat = 60 * time.Second
 // from that same goroutine; the Exporter adds no synchronization of its
 // own.
 type Exporter struct {
-	p          Publisher
-	cfg        Config
-	discovered map[string]bool   // object ids with discovery published
+	p   Publisher
+	cfg Config
+	// discovered is keyed by "component/id" (e.g. "sensor/infinid_bus_online"),
+	// not just id, so a future object-name collision between a sensor and a
+	// binary_sensor can't silently skip one of the two discovery publishes.
+	discovered map[string]bool
 	last       map[string]string // state topic → last payload
 	lastHealth map[string]string // health state topic → last payload; kept
 	// separate from last so PublishState's absent-field retraction pass
 	// (which only knows about state.Snapshot fields) never sees health
 	// topics as unproduced and retracts them to "None".
-	lastBeat time.Time
+	lastBeat       time.Time
+	lastHealthBeat time.Time
 }
 
 // New builds an Exporter.
 func New(p Publisher, cfg Config) *Exporter {
 	return &Exporter{p: p, cfg: cfg,
 		discovered: map[string]bool{}, last: map[string]string{}, lastHealth: map[string]string{}}
+}
+
+// Reassert clears all discovery and change-detection state so the next
+// publish cycle re-sends everything, including discovery configs. Call this
+// after an MQTT reconnect — a broker restart or a new session may have
+// dropped every retained message the previous session believed was still
+// there — from the same single goroutine that calls the other Exporter
+// methods.
+func (e *Exporter) Reassert() {
+	e.discovered = map[string]bool{}
+	e.last = map[string]string{}
+	e.lastHealth = map[string]string{}
+	e.lastBeat = time.Time{}
+	e.lastHealthBeat = time.Time{}
 }
 
 func (e *Exporter) zoneName(z int) string {
@@ -102,7 +120,8 @@ func (e *Exporter) PublishDiscovery(zones []int) {
 
 func (e *Exporter) publishConfig(def entityDef, object string, device map[string]any, component string) {
 	id := "infinid_" + object
-	if e.discovered[id] {
+	discKey := component + "/" + id
+	if e.discovered[discKey] {
 		return
 	}
 	cfg := map[string]any{
@@ -125,7 +144,7 @@ func (e *Exporter) publishConfig(def entityDef, object string, device map[string
 	payload, _ := json.Marshal(cfg)
 	topic := fmt.Sprintf("%s/%s/%s/config", e.cfg.DiscoveryPrefix, component, id)
 	if e.p.Publish(topic, payload, true) == nil {
-		e.discovered[id] = true
+		e.discovered[discKey] = true
 	}
 }
 
@@ -200,15 +219,23 @@ type Health struct {
 }
 
 // PublishHealth publishes daemon vitals and fault summary entities. It uses
-// its own change-detection map (lastHealth), distinct from the state topic
-// map (last) that PublishState's absent-field retraction pass sweeps —
+// its own change-detection map (lastHealth) and its own heartbeat
+// (lastHealthBeat), distinct from PublishState's (last, lastBeat) —
 // health fields are always present so they need no retraction, and sharing
-// the map would cause PublishState to retract every health topic to "None"
-// on its next call.
+// the state-topic map would cause PublishState to retract every health
+// topic to "None" on its next call. The heartbeat mirrors PublishState's:
+// without it, an unchanging health snapshot would never republish, so a
+// broker that lost its retained messages (restart, reconnect without a
+// persistent session) would leave fault/bus indicators absent until the
+// underlying value next changes.
 func (e *Exporter) PublishHealth(h Health, now time.Time) {
+	beat := now.Sub(e.lastHealthBeat) >= heartbeat
+	if beat {
+		e.lastHealthBeat = now
+	}
 	pub := func(object, payload string) {
 		topic := fmt.Sprintf("%s/%s/state", e.cfg.BaseTopic, object)
-		if e.lastHealth[topic] == payload {
+		if !beat && e.lastHealth[topic] == payload {
 			return
 		}
 		if e.p.Publish(topic, []byte(payload), true) == nil {
@@ -222,11 +249,20 @@ func (e *Exporter) PublishHealth(h Health, now time.Time) {
 		}
 		return "OFF"
 	}
+	lastFault := h.LastFault
+	if lastFault == "" {
+		// An empty retained payload is an MQTT retained-delete: publishing
+		// "" would erase the previous run's fault string on the broker
+		// instead of showing "no fault", and — before any fault has ever
+		// occurred — change detection would see ""=="" for the missing key
+		// and never publish anything at all.
+		lastFault = "None"
+	}
 	pub("frames_per_min", num(h.FramesPerMin))
 	pub("unknown_frames", num(h.UnknownFrames))
 	pub("sam_failures", num(h.SAMFailures))
 	pub("fault_count", num(h.FaultCount))
-	pub("last_fault", h.LastFault)
+	pub("last_fault", lastFault)
 	pub("fault_active", onoff(h.FaultActive))
 	pub("bus_online", onoff(h.BusOnline))
 }

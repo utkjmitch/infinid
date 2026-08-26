@@ -83,12 +83,17 @@ var zoneEntities = []entityDef{
 	{field: "damper_position", object: "damper_%s", name: "Damper", unit: "%", stateClass: "measurement", transform: pct15},
 }
 
-// healthEntities publish on the hub device; binary sensors carry a
-// distinct discovery component.
+// healthEntities and binaryEntities publish on the hub device; binary
+// sensors carry a distinct discovery component. Both are discovery-only:
+// their state flows through PublishHealth by hardcoded object name, never
+// through PublishState/snap.Sys — health fields are always present, so
+// routing them into the snapshot path would put health topics into e.last
+// and re-open the PublishHealth/PublishState retraction collision (see the
+// Exporter.lastHealth doc comment in exporter.go).
 var healthEntities = []entityDef{
 	{field: "last_fault", object: "last_fault", name: "Last fault", text: true},
 	{field: "fault_count", object: "fault_count", name: "Fault count", stateClass: "total_increasing"},
-	{field: "frames_per_min", object: "frames_per_min", name: "Bus frames/min"},
+	{field: "frames_per_min", object: "frames_per_min", name: "Bus frames/min", stateClass: "measurement"},
 	{field: "unknown_frames", object: "unknown_frames", name: "Unknown frames", stateClass: "total_increasing"},
 	{field: "sam_failures", object: "sam_failures", name: "SAM read failures", stateClass: "total_increasing"},
 }

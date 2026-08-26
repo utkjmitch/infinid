@@ -306,7 +306,7 @@ func TestFaultAndHealthEntities(t *testing.T) {
 	p := newFake()
 	e := New(p, testConfig())
 	e.PublishDiscovery(nil)
-	for _, id := range []string{"infinid_last_fault", "infinid_fault_count", "infinid_frames_per_min", "infinid_unknown_frames"} {
+	for _, id := range []string{"infinid_last_fault", "infinid_fault_count", "infinid_frames_per_min", "infinid_unknown_frames", "infinid_sam_failures"} {
 		if len(p.msgs["homeassistant/sensor/"+id+"/config"]) == 0 {
 			t.Errorf("no discovery for %s", id)
 		}
@@ -352,5 +352,127 @@ func TestHealthNotRetractedByPublishState(t *testing.T) {
 	}
 	if got[0] != "ON" {
 		t.Fatalf("bus_online payload = %v, want [ON]", got)
+	}
+}
+
+// TestHealthChangeDetection pins that PublishHealth, like PublishState,
+// suppresses a republish when the payload hasn't changed and we're not on a
+// heartbeat boundary.
+func TestHealthChangeDetection(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	h := Health{FramesPerMin: 1500, BusOnline: true}
+	e.PublishHealth(h, t0)
+	e.PublishHealth(h, t0.Add(time.Second)) // unchanged, well under heartbeat
+	if got := p.msgs["infinid/frames_per_min/state"]; len(got) != 1 {
+		t.Fatalf("frames_per_min published %d times, want 1", len(got))
+	}
+	if got := p.msgs["infinid/bus_online/state"]; len(got) != 1 {
+		t.Fatalf("bus_online published %d times, want 1", len(got))
+	}
+}
+
+// TestHealthHeartbeatRepublishes pins PublishHealth's own heartbeat
+// (lastHealthBeat, mirroring PublishState's lastBeat): without it, an
+// unchanging health snapshot would never republish, so a broker that lost
+// its retained messages (restart, non-persistent reconnect) would leave
+// fault/bus indicators absent indefinitely.
+func TestHealthHeartbeatRepublishes(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	h := Health{FramesPerMin: 1500, BusOnline: true}
+	topic := "infinid/bus_online/state"
+	e.PublishHealth(h, t0)
+	e.PublishHealth(h, t0.Add(30*time.Second)) // unchanged, under heartbeat
+	if got := p.msgs[topic]; len(got) != 1 {
+		t.Fatalf("published %d times before heartbeat, want 1", len(got))
+	}
+	// Heartbeat boundary is inclusive (>=), mirroring PublishState.
+	e.PublishHealth(h, t0.Add(60*time.Second))
+	if got := p.msgs[topic]; len(got) != 2 {
+		t.Fatalf("heartbeat republish missing at exact 60s boundary: %v", got)
+	}
+}
+
+// TestHealthEmptyLastFaultPublishesNone pins the fix for two failure modes
+// of publishing LastFault=="" verbatim: an empty retained MQTT payload is a
+// retained-delete (so "clearing" a fault would erase the topic instead of
+// showing "no fault"), and before any fault has ever occurred change
+// detection would see ""=="" against the zero-value map entry and never
+// publish anything at all.
+func TestHealthEmptyLastFaultPublishesNone(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	e.PublishHealth(Health{LastFault: ""}, t0)
+	if got := p.msgs["infinid/last_fault/state"]; len(got) != 1 || got[0] != "None" {
+		t.Fatalf("last_fault = %v, want [None]", got)
+	}
+}
+
+type countingErrPub struct {
+	err   error
+	calls map[string]int
+}
+
+func newCountingErrPub(err error) *countingErrPub {
+	return &countingErrPub{err: err, calls: map[string]int{}}
+}
+
+func (f *countingErrPub) Publish(topic string, payload []byte, retain bool) error {
+	f.calls[topic]++
+	return f.err
+}
+
+// TestHealthPublishFailureRetries pins that a failed health publish leaves
+// lastHealth unrecorded, so the same value is retried (not silently
+// swallowed as "already sent") on the next PublishHealth call.
+func TestHealthPublishFailureRetries(t *testing.T) {
+	p := newCountingErrPub(errors.New("boom"))
+	e := New(p, testConfig())
+	h := Health{FramesPerMin: 1500, BusOnline: true}
+	e.PublishHealth(h, t0)
+	e.PublishHealth(h, t0.Add(time.Second))
+	if got := p.calls["infinid/frames_per_min/state"]; got != 2 {
+		t.Fatalf("frames_per_min publish attempts = %d, want 2 (retry after failure)", got)
+	}
+	if got := p.calls["infinid/bus_online/state"]; got != 2 {
+		t.Fatalf("bus_online publish attempts = %d, want 2 (retry after failure)", got)
+	}
+}
+
+// TestReassertRepublishesEverything pins the reconnect seam: after Reassert
+// clears discovery/change-detection/heartbeat state, the next publish cycle
+// must re-send discovery, state, and health from scratch — the scenario is
+// a paho reconnect where a fresh session may mean the broker lost every
+// retained message we'd previously stopped resending.
+func TestReassertRepublishesEverything(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	e.PublishDiscovery([]int{1})
+	snap := snapWith(map[string]state.Field{"suction_pressure": {Value: 121, TS: t0}}, nil)
+	e.PublishState(snap, t0)
+	e.PublishHealth(Health{BusOnline: true}, t0)
+
+	discoveryTopic := "homeassistant/sensor/infinid_compressor_stage/config"
+	stateTopic := "infinid/suction_pressure/state"
+	healthTopic := "infinid/bus_online/state"
+	discBefore := len(p.msgs[discoveryTopic])
+	stateBefore := len(p.msgs[stateTopic])
+	healthBefore := len(p.msgs[healthTopic])
+
+	e.Reassert()
+
+	e.PublishDiscovery([]int{1})
+	e.PublishState(snap, t0.Add(time.Second))
+	e.PublishHealth(Health{BusOnline: true}, t0.Add(time.Second))
+
+	if got := len(p.msgs[discoveryTopic]); got != discBefore+1 {
+		t.Errorf("discovery not republished after Reassert: %d messages, want %d", got, discBefore+1)
+	}
+	if got := len(p.msgs[stateTopic]); got != stateBefore+1 {
+		t.Errorf("state not republished after Reassert: %d messages, want %d", got, stateBefore+1)
+	}
+	if got := len(p.msgs[healthTopic]); got != healthBefore+1 {
+		t.Errorf("health not republished after Reassert: %d messages, want %d", got, healthBefore+1)
 	}
 }
