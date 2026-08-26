@@ -3,6 +3,7 @@ package mqtt
 import (
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +20,11 @@ type pahoLogger struct{ prefix string }
 
 func (l pahoLogger) Println(v ...interface{})               { log.Println(append([]interface{}{l.prefix}, v...)...) }
 func (l pahoLogger) Printf(format string, v ...interface{}) { log.Printf(l.prefix+" "+format, v...) }
+
+// pahoLogOnce guards the assignment to paho's package-level logger globals:
+// writing them per-Connect would race any live paho goroutine from an
+// earlier client.
+var pahoLogOnce sync.Once
 
 // PahoPublisher adapts an eclipse/paho client to the Publisher seam, with
 // LWT ("offline" retained on the availability topic), auto-reconnect, and
@@ -46,14 +52,17 @@ type PahoPublisher struct {
 // token that completes with an actual error (as opposed to timing out) is
 // surfaced here.
 func Connect(broker, user, pass, clientID, availabilityTopic string) (*PahoPublisher, error) {
-	paho.ERROR = pahoLogger{prefix: "mqtt[error]"}
-	paho.CRITICAL = pahoLogger{prefix: "mqtt[critical]"}
+	pahoLogOnce.Do(func() {
+		paho.ERROR = pahoLogger{prefix: "mqtt[error]"}
+		paho.CRITICAL = pahoLogger{prefix: "mqtt[critical]"}
+	})
 	pp := &PahoPublisher{}
 	opts := paho.NewClientOptions().
 		AddBroker(broker).
 		SetClientID(clientID).
 		SetUsername(user).
 		SetPassword(pass).
+		SetProtocolVersion(4). // explicit: paho's 3.1 fallback swallows the rejected-CONNACK ERROR line
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(5*time.Second).
