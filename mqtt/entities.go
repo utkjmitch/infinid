@@ -24,15 +24,21 @@ func pct15(v float64) string { return fmt.Sprintf("%.0f", v/15.0*100.0) }
 // used value).
 func inv100(v float64) string { return fmt.Sprintf("%.0f", 100.0-v) }
 
+// round0 and round2 give fixed-precision output for float32-sourced fields
+// that otherwise print with float64's full binary-to-decimal expansion
+// (e.g. 412.70001220703125, 3.3333333333333335).
+func round0(v float64) string { return fmt.Sprintf("%.0f", v) }
+func round2(v float64) string { return fmt.Sprintf("%.2f", v) }
+
 // sysEntities: system-level sensors. The first 9 + the damper pattern are
 // the frozen dashboard contract.
 var sysEntities = []entityDef{
 	{field: "compressor_stage", object: "compressor_stage", name: "Compressor stage"},
-	{field: "compressor_rpm", object: "compressor_rpm", name: "Compressor RPM", unit: "rpm"},
-	{field: "supply_cfm", object: "supply_cfm", name: "Supply airflow", unit: "CFM"},
-	{field: "blower_rpm", object: "blower_rpm", name: "Blower RPM", unit: "rpm"},
-	{field: "static_pressure", object: "static_pressure", name: "Static pressure", unit: "inH2O", stateClass: "measurement"},
-	{field: "blower_watts", object: "blower_watts", name: "Blower power", unit: "W", deviceClass: "power", stateClass: "measurement"},
+	{field: "compressor_rpm", object: "compressor_rpm", name: "Compressor RPM", unit: "rpm", stateClass: "measurement"},
+	{field: "supply_cfm", object: "supply_cfm", name: "Supply airflow", unit: "CFM", stateClass: "measurement"},
+	{field: "blower_rpm", object: "blower_rpm", name: "Blower RPM", unit: "rpm", stateClass: "measurement"},
+	{field: "static_pressure", object: "static_pressure", name: "Static pressure", unit: "inH2O", stateClass: "measurement", transform: round2},
+	{field: "blower_watts", object: "blower_watts", name: "Blower power", unit: "W", deviceClass: "power", stateClass: "measurement", transform: round0},
 	{field: "suction_pressure", object: "suction_pressure", name: "Suction pressure", unit: "psi", deviceClass: "pressure", stateClass: "measurement"},
 	{field: "outdoor_coil_temp", object: "outdoor_coil_temp", name: "Outdoor coil", unit: "°F", deviceClass: "temperature", stateClass: "measurement"},
 	{field: "discharge_temp", object: "discharge_temp", name: "Discharge temp", unit: "°F", deviceClass: "temperature", stateClass: "measurement"},
@@ -42,7 +48,7 @@ var sysEntities = []entityDef{
 	{field: "suction_temp", object: "suction_temp", name: "Suction temp", unit: "°F", deviceClass: "temperature", stateClass: "measurement"},
 	{field: "superheat", object: "superheat", name: "Superheat", unit: "°F", stateClass: "measurement"},
 	{field: "line_voltage", object: "line_voltage", name: "Line voltage", unit: "V", deviceClass: "voltage", stateClass: "measurement"},
-	{field: "filter_life_used", object: "filter_life", name: "Filter life", unit: "%", transform: inv100},
+	{field: "filter_life_used", object: "filter_life", name: "Filter life", unit: "%", stateClass: "measurement", transform: inv100},
 	{field: "heat_stage1_cycles", object: "heat_stage1_cycles", name: "Heat stage 1 cycles", stateClass: "total_increasing"},
 	{field: "heat_stage2_cycles", object: "heat_stage2_cycles", name: "Heat stage 2 cycles", stateClass: "total_increasing"},
 	{field: "blower_cycles", object: "blower_cycles", name: "Blower cycles", stateClass: "total_increasing"},
@@ -73,6 +79,6 @@ var zoneEntities = []entityDef{
 	{field: "fan_mode", object: "zone_%s_fan_mode", name: "Fan mode", text: true},
 	{field: "hold", object: "zone_%s_hold", name: "Hold"},
 	{field: "hold_permanent", object: "zone_%s_hold_permanent", name: "Hold (permanent)"},
-	{field: "hold_remaining_min", object: "zone_%s_hold_remaining", name: "Hold remaining", unit: "min"},
-	{field: "damper_position", object: "damper_%s", name: "Damper", unit: "%", transform: pct15},
+	{field: "hold_remaining_min", object: "zone_%s_hold_remaining", name: "Hold remaining", unit: "min", transform: round0},
+	{field: "damper_position", object: "damper_%s", name: "Damper", unit: "%", stateClass: "measurement", transform: pct15},
 }

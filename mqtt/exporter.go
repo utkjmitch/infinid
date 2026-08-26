@@ -27,6 +27,13 @@ type Config struct {
 const heartbeat = 60 * time.Second
 
 // Exporter publishes discovery + state with change detection.
+//
+// Concurrency: not safe for concurrent use. All methods must be called
+// from a single goroutine — the discovery/last-payload/heartbeat maps are
+// unsynchronized by design. In production that single caller is the Task
+// 11 publish loop. Publisher implementations only need to be safe to call
+// from that same goroutine; the Exporter adds no synchronization of its
+// own.
 type Exporter struct {
 	p          Publisher
 	cfg        Config
@@ -114,27 +121,42 @@ func (e *Exporter) publishConfig(def entityDef, object string, device map[string
 
 // PublishState publishes changed fields (retained) and re-publishes
 // everything on the heartbeat so a restarted broker/HA converges. Stale
-// fields publish "None" — unknown beats stale-as-fresh.
+// fields publish "None" — unknown beats stale-as-fresh. A field present in
+// an earlier snapshot but absent from this one (a timed hold clearing, a
+// mask-retracted zone) is actively retracted to "None" rather than left
+// frozen at its last retained value.
 func (e *Exporter) PublishState(snap state.Snapshot, now time.Time) {
 	beat := now.Sub(e.lastBeat) >= heartbeat
 	if beat {
 		e.lastBeat = now
 	}
+	produced := map[string]bool{}
 	for _, def := range sysEntities {
 		if f, ok := snap.Sys[def.field]; ok {
-			e.publishField(def, def.object, f, beat)
+			produced[e.publishField(def, def.object, f, beat)] = true
 		}
 	}
 	for z, zf := range snap.Zones {
 		for _, def := range zoneEntities {
 			if f, ok := zf[def.field]; ok {
-				e.publishField(def, fmt.Sprintf(def.object, e.zoneName(z)), f, beat)
+				produced[e.publishField(def, fmt.Sprintf(def.object, e.zoneName(z)), f, beat)] = true
 			}
+		}
+	}
+	for topic := range e.last {
+		if produced[topic] {
+			continue
+		}
+		// Retraction, not a normal publish: only drop the last-payload
+		// record on success so a failed publish is retried next cycle
+		// instead of silently forgotten.
+		if e.p.Publish(topic, []byte("None"), true) == nil {
+			delete(e.last, topic)
 		}
 	}
 }
 
-func (e *Exporter) publishField(def entityDef, object string, f state.Field, beat bool) {
+func (e *Exporter) publishField(def entityDef, object string, f state.Field, beat bool) string {
 	var payload string
 	switch {
 	case f.Stale:
@@ -148,20 +170,23 @@ func (e *Exporter) publishField(def entityDef, object string, f state.Field, bea
 	}
 	topic := fmt.Sprintf("%s/%s/state", e.cfg.BaseTopic, object)
 	if !beat && e.last[topic] == payload {
-		return
+		return topic
 	}
 	if e.p.Publish(topic, []byte(payload), true) == nil {
 		e.last[topic] = payload
 	}
+	return topic
 }
 
 // PublishAvailability publishes the retained availability flag. Bus
 // silence maps to offline — HA must degrade to unavailable, never show
-// stale data as fresh.
-func (e *Exporter) PublishAvailability(online bool) {
+// stale data as fresh. The publish error is returned rather than
+// swallowed: a failed startup "online" publish must be visible to the
+// caller, not leave every HA entity silently Unavailable.
+func (e *Exporter) PublishAvailability(online bool) error {
 	v := "offline"
 	if online {
 		v = "online"
 	}
-	e.p.Publish(e.availabilityTopic(), []byte(v), true)
+	return e.p.Publish(e.availabilityTopic(), []byte(v), true)
 }

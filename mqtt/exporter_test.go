@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -65,6 +66,9 @@ func TestDiscoveryContractIDs(t *testing.T) {
 		if cfg["unique_id"] != id {
 			t.Errorf("%s unique_id = %v", id, cfg["unique_id"])
 		}
+		if cfg["object_id"] != id {
+			t.Errorf("%s object_id = %v", id, cfg["object_id"])
+		}
 		if cfg["availability_topic"] != "infinid/availability" {
 			t.Errorf("%s availability = %v", id, cfg["availability_topic"])
 		}
@@ -75,9 +79,17 @@ func TestDiscoveryContractIDs(t *testing.T) {
 		t.Fatal("no zone temp discovery")
 	}
 	var zcfg map[string]any
-	json.Unmarshal([]byte(p.msgs[ztopic][0]), &zcfg)
-	dev := zcfg["device"].(map[string]any)
-	ids := dev["identifiers"].([]any)
+	if err := json.Unmarshal([]byte(p.msgs[ztopic][0]), &zcfg); err != nil {
+		t.Fatalf("zone config unmarshal: %v", err)
+	}
+	dev, ok := zcfg["device"].(map[string]any)
+	if !ok {
+		t.Fatalf("zone config device field missing/wrong type: %#v", zcfg["device"])
+	}
+	ids, ok := dev["identifiers"].([]any)
+	if !ok || len(ids) == 0 {
+		t.Fatalf("zone device identifiers missing/wrong type: %#v", dev["identifiers"])
+	}
 	if ids[0] != "infinid_zone_2" {
 		t.Errorf("zone device identifiers = %v", ids)
 	}
@@ -98,10 +110,14 @@ func TestStatePublishChangeDetection(t *testing.T) {
 	if p.msgs[topic][0] != "121" {
 		t.Errorf("payload = %q", p.msgs[topic][0])
 	}
-	// Heartbeat: after 60s everything republishes even unchanged.
-	e.PublishState(snap, t0.Add(61*time.Second))
+	if !p.ret[topic] {
+		t.Errorf("state topic %s not retained", topic)
+	}
+	// Heartbeat boundary is inclusive (>=): exactly 60s after the first
+	// publish must republish even though the value is unchanged.
+	e.PublishState(snap, t0.Add(60*time.Second))
 	if len(p.msgs[topic]) != 2 {
-		t.Fatalf("heartbeat republish missing")
+		t.Fatalf("heartbeat republish missing at exact 60s boundary")
 	}
 }
 
@@ -152,5 +168,135 @@ func TestHoldPermanentField(t *testing.T) {
 	got := p.msgs["infinid/zone_bedrooms_hold_permanent/state"]
 	if len(got) != 1 || got[0] != "1" {
 		t.Fatalf("hold_permanent payload = %v, want [1]", got)
+	}
+}
+
+// TestAbsentFieldRetraction pins the fix for a field that disappears from
+// the snapshot (state.go deletes hold_remaining_min when a timed hold
+// clears; a mask-retracted zone vanishes the same way): the exporter must
+// actively retract the retained topic to "None" rather than leaving the
+// last real value frozen on the broker forever. Once retracted, repeated
+// absence must not re-send.
+func TestAbsentFieldRetraction(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	topic := "infinid/zone_bedrooms_hold_remaining/state"
+
+	withHold := snapWith(nil, map[int]map[string]state.Field{
+		1: {"hold_remaining_min": {Value: 5, TS: t0}},
+	})
+	e.PublishState(withHold, t0)
+	if got := p.msgs[topic]; len(got) != 1 || got[0] != "5" {
+		t.Fatalf("initial payload = %v, want [5]", got)
+	}
+
+	withoutHold := snapWith(nil, map[int]map[string]state.Field{1: {}})
+	e.PublishState(withoutHold, t0.Add(time.Second))
+	got := p.msgs[topic]
+	if len(got) != 2 || got[1] != "None" {
+		t.Fatalf("retraction payload = %v, want [5 None]", got)
+	}
+
+	// Field stays absent: no repeated retraction sends.
+	e.PublishState(withoutHold, t0.Add(2*time.Second))
+	if got := p.msgs[topic]; len(got) != 2 {
+		t.Fatalf("retracted field republished: %v", got)
+	}
+}
+
+// TestFloatFormattingTransforms pins fixed-precision formatting for
+// float32-sourced fields that otherwise emit 17-digit garbage
+// (0.3499999940395355, 412.70001220703125, 3.3333333333333335).
+func TestFloatFormattingTransforms(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	snap := snapWith(map[string]state.Field{
+		"static_pressure": {Value: 0.3499999940395355, TS: t0},
+		"blower_watts":    {Value: 412.70001220703125, TS: t0},
+	}, map[int]map[string]state.Field{
+		1: {"hold_remaining_min": {Value: 3.3333333333333335, TS: t0}},
+	})
+	e.PublishState(snap, t0)
+	if got := p.msgs["infinid/static_pressure/state"]; len(got) != 1 || got[0] != "0.35" {
+		t.Errorf("static_pressure payload = %v, want [0.35]", got)
+	}
+	if got := p.msgs["infinid/blower_watts/state"]; len(got) != 1 || got[0] != "413" {
+		t.Errorf("blower_watts payload = %v, want [413]", got)
+	}
+	if got := p.msgs["infinid/zone_bedrooms_hold_remaining/state"]; len(got) != 1 || got[0] != "3" {
+		t.Errorf("hold_remaining_min payload = %v, want [3]", got)
+	}
+}
+
+// TestFilterLifeInverseTransform covers the only inverting transform:
+// the bus reports "life used", HA shows "life remaining".
+func TestFilterLifeInverseTransform(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	snap := snapWith(map[string]state.Field{
+		"filter_life_used": {Value: 30, TS: t0},
+	}, nil)
+	e.PublishState(snap, t0)
+	if got := p.msgs["infinid/filter_life/state"]; len(got) != 1 || got[0] != "70" {
+		t.Fatalf("filter_life payload = %v, want [70]", got)
+	}
+}
+
+// TestStaleThenFreshRecoveryRepublishes pins the value/None/value sequence:
+// a field going stale must publish "None", and recovering to the same
+// fresh value afterward must republish it (not be swallowed by change
+// detection against the pre-stale payload).
+func TestStaleThenFreshRecoveryRepublishes(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	topic := "infinid/zone_bedrooms_fan_mode/state"
+	fresh := snapWith(nil, map[int]map[string]state.Field{
+		1: {"fan_mode": {Value: 2, Text: "med", TS: t0}},
+	})
+	stale := snapWith(nil, map[int]map[string]state.Field{
+		1: {"fan_mode": {Value: 2, Text: "med", TS: t0, Stale: true}},
+	})
+	e.PublishState(fresh, t0)
+	e.PublishState(stale, t0.Add(time.Second))
+	e.PublishState(fresh, t0.Add(2*time.Second))
+	want := []string{"med", "None", "med"}
+	got := p.msgs[topic]
+	if len(got) != len(want) {
+		t.Fatalf("payload sequence = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("payload sequence = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestZoneNameFallbackBeyondConfigured pins the documented fallback:
+// zones beyond len(ZoneNames) get zoneName "zone_<n>", which the zone_%s_*
+// object pattern then embeds as "zone_zone_<n>_*".
+func TestZoneNameFallbackBeyondConfigured(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig()) // only 3 zone names configured
+	snap := snapWith(nil, map[int]map[string]state.Field{
+		5: {"temp": {Value: 70, TS: t0}},
+	})
+	e.PublishState(snap, t0)
+	if got := p.msgs["infinid/zone_zone_5_temp/state"]; len(got) != 1 || got[0] != "70" {
+		t.Fatalf("zone_5 fallback payload = %v, want [70]", got)
+	}
+}
+
+type errPub struct{ err error }
+
+func (f *errPub) Publish(topic string, payload []byte, retain bool) error { return f.err }
+
+// TestPublishAvailabilityReturnsError pins that a failed publish is
+// surfaced to the caller rather than swallowed — a failed startup
+// "online" publish must not silently leave every HA entity Unavailable.
+func TestPublishAvailabilityReturnsError(t *testing.T) {
+	wantErr := errors.New("boom")
+	e := New(&errPub{err: wantErr}, testConfig())
+	if err := e.PublishAvailability(true); err != wantErr {
+		t.Fatalf("err = %v, want %v", err, wantErr)
 	}
 }
