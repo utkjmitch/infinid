@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -37,11 +39,11 @@ func Handler(st *state.State, rec *capture.Recorder, journalPath string,
 			Op   string    `json:"op"`
 			Data string    `json:"data"`
 		}
-		var out []frame
-		for _, rec := range rec.Snapshot() {
-			out = append(out, frame{TS: rec.TS,
-				Src: fmt.Sprintf("%04x", rec.Src), Dst: fmt.Sprintf("%04x", rec.Dst),
-				Op: fmt.Sprintf("%02x", rec.Op), Data: hex.EncodeToString(rec.Data)})
+		out := []frame{} // not nil: an idle ring must render as [], not null
+		for _, r := range rec.Snapshot() {
+			out = append(out, frame{TS: r.TS,
+				Src: fmt.Sprintf("%04x", r.Src), Dst: fmt.Sprintf("%04x", r.Dst),
+				Op: fmt.Sprintf("%02x", r.Op), Data: hex.EncodeToString(r.Data)})
 		}
 		writeJSON(w, out)
 	})
@@ -54,16 +56,7 @@ func Handler(st *state.State, rec *capture.Recorder, journalPath string,
 			return
 		}
 		defer f.Close()
-		buf := make([]byte, 64*1024)
-		for {
-			n, err := f.Read(buf)
-			if n > 0 {
-				w.Write(buf[:n])
-			}
-			if err != nil {
-				return
-			}
-		}
+		io.Copy(w, f)
 	})
 
 	return mux
@@ -71,5 +64,9 @@ func Handler(st *state.State, rec *capture.Recorder, journalPath string,
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		// Too late for a status code; a marshal failure would otherwise be
+		// a silent empty 200 (statusFn is caller-owned map[string]any).
+		log.Printf("rest: encode: %v", err)
+	}
 }
