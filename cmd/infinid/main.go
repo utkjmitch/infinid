@@ -308,6 +308,13 @@ func (d *daemon) run(device string) error {
 	for {
 		f, err := dec.Next()
 		if err != nil {
+			// A failing Next is when the decoder slides byte-by-byte through
+			// its buffer racking up resyncs — fold those in before bailing or
+			// the flapping-bus case undercounts the running total.
+			cur := uint64(dec.Resyncs())
+			d.mu.Lock()
+			d.crcResyncs += cur - lastResyncs
+			d.mu.Unlock()
 			return err
 		}
 		now := time.Now()
@@ -371,7 +378,7 @@ func (d *daemon) run(device string) error {
 			totalResyncs := d.crcResyncs
 			d.framesWindow = 0
 			d.mu.Unlock()
-			log.Printf("stats: %d frames this interval, %d unknown total, %d resync bytes",
+			log.Printf("stats: %d frames this interval, %d unknown total, %d resync bytes total",
 				windowFrames, totalUnknown, totalResyncs)
 			lastStats = time.Now()
 		}
