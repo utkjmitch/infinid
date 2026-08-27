@@ -5,12 +5,15 @@ require writing Go.
 
 ## Unknown-register observations
 
-infinid counts every register it sees but doesn't decode
-(`sensor.infinid_unknown_frames`). A climbing count is a map of undecoded
-traffic on your bus — which registers exist, how often they're read or
-written, and by which devices. Even without a full decode, reporting which
-unknown registers show up on your equipment (especially if your system is
-a different generation or configuration than what's already covered in
+infinid publishes a single running total of undecoded traffic
+(`sensor.infinid_unknown_frames`). On its own that counter only tells you
+that undecoded traffic exists on your bus and roughly how much — it's one
+scalar, not a breakdown. To see which registers, how often, and from which
+devices, run `businspect tables` over your own capture (see
+[decode workflow](04-decode-workflow.md)); that's the actual map of
+undecoded traffic. Even without a full decode, reporting which unknown
+registers show up on your equipment (especially if your system is a
+different generation or configuration than what's already covered in
 [protocol-tables.md](../protocol-tables.md)) tells the project where to
 look next.
 

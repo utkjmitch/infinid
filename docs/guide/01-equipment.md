@@ -25,8 +25,8 @@ Any Linux box near the equipment works. The daemon that reads the bus
 (`infinid`) is a single static binary with no runtime dependencies beyond a
 USB serial port; it runs fine on a Raspberry Pi, an old laptop, a NUC, or a
 VM with USB passthrough. If you're already running Home Assistant OS on a
-Pi, the [add-on install path](03-first-capture.md) is the least additional
-hardware.
+Pi, the [add-on install path](03-first-capture.md) needs the least
+additional hardware.
 
 ## Search terms
 
@@ -38,8 +38,10 @@ it works fine here too.
 
 ## What you do NOT need
 
-- No SAM (System Access Module) hardware — SAM emulation, when infinid
-  eventually supports it, is done in software.
+- No SAM (System Access Module) hardware — infinid can already issue the
+  SAM's read-only requests in software (the `-sam` flag / `sam_reads`
+  add-on option), off by default. See
+  [MQTT-CONTRACT.md](../MQTT-CONTRACT.md) for what it adds.
 - No cloud account of any kind.
 - No Infinitude proxy or other bridging software running alongside infinid.
 - No soldering. The tap is two wires landed on an existing terminal block

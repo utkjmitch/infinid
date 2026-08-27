@@ -8,8 +8,7 @@ the system (air handler, outdoor unit, zone/damper controller, remote
 sensors). A "tap" means landing two more wires, A and B, on the same
 terminals some existing device already uses. This adds a passive listener
 to the bus. It does not add a new bus segment, does not remove or move any
-existing wire, and does not change how any existing device behaves. Wiring
-in a listener this way changes nothing electrically about the system.
+existing wire, and does not change how any existing device behaves.
 
 ## Where people tap
 
@@ -36,8 +35,8 @@ equipment that costs a lot more than a service call.
 
 ## What success looks like
 
-Once the tap is landed and the breaker is back on, you're looking for two
-independent signs that things are fine:
+Once the tap is landed and the breaker is back on, check two things —
+neither is sufficient on its own, but both should hold:
 
 - The HVAC system itself is running exactly as it did before you touched
   it — no new faults, no change in behavior. The tap is passive; if
@@ -51,6 +50,10 @@ independent signs that things are fine:
   ```
 
   You should see an entry for your adapter. That path is what you'll hand
-  to infinid in the next guide. If nothing shows up, check the USB
-  connection before suspecting the bus tap — the adapter enumerating has
-  nothing to do with A/B being landed correctly yet.
+  to infinid in the next guide.
+
+The adapter enumerating only proves the USB side is working — it says
+nothing about whether A and B are actually landed correctly on the bus.
+If nothing shows up, that's a USB problem to chase first. If it does show
+up, the real test of the tap itself is whether infinid sees real frames
+once you point it at that path, which is the next guide.
