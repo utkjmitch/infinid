@@ -116,11 +116,11 @@ func main() {
 		exporter = mqtt.New(pub, mqtt.Config{
 			BaseTopic: *baseTopic, DiscoveryPrefix: *discoveryPrefix,
 			ZoneNames: zoneNames, Version: version})
-		// Errors ignored deliberately (amendment A4): PublishAvailability now
-		// returns an error, but the publish loop republishes availability
-		// every second, so a transient failure at this instant self-heals on
-		// the next cycle rather than needing to be fatal at startup.
-		_ = exporter.PublishAvailability(true)
+		// No startup PublishAvailability(true) here (review item 5): the
+		// publish loop below owns the availability topic exclusively and
+		// publishes the real bus-online value within its first second —
+		// an eager "online" here would just flap to "offline" a moment
+		// later, before any frame has actually been decoded.
 	}
 
 	d := &daemon{
@@ -230,6 +230,15 @@ func (d *daemon) run(device string) error {
 	log.Printf("listening on %s (sam=%v)", device, d.samEnabled)
 
 	var sched *sam.Scheduler
+	// lastSchedFailures is the scheduler's own cumulative Failures() count as
+	// of the last time either goroutine below observed it. sched is rebuilt
+	// fresh on every reconnect and so restarts its own counter at 0; review
+	// item 3 turns d.samFailures into a daemon-level running total across
+	// reconnects by accumulating (Failures()-lastSchedFailures) deltas
+	// instead of overwriting. Every read/write of lastSchedFailures happens
+	// while schedMu is held (both sites below), so the plain int needs no
+	// atomic/lock of its own beyond that.
+	var lastSchedFailures int
 	if d.samEnabled {
 		sched = sam.New(port, []sam.Target{
 			{Reg: [3]byte{0x00, 0x3b, 0x02}, Interval: 10 * time.Second},
@@ -243,12 +252,26 @@ func (d *daemon) run(device string) error {
 		// request never times out and the scheduler wedges. This ticker
 		// drives Tick once a second regardless of bus traffic; schedMu
 		// serializes it against the frame-driven NoteFrame/Tick calls below,
-		// since Scheduler is documented not safe for concurrent use. The
-		// stop channel is closed by the deferred run() cleanup so the
-		// goroutine never outlives this call.
-		stop := make(chan struct{})
-		defer close(stop)
+		// since Scheduler is documented not safe for concurrent use.
+		//
+		// Review item 1: closing stop only signals the goroutine to exit —
+		// it does not wait for it. Without a join, a ticker fire that is
+		// already inside (or about to enter) the schedMu critical section
+		// when run() returns can call sched.Tick → port.Write on a port that
+		// the deferred port.Close() (registered above, so it runs after this
+		// defer in LIFO order) has already closed; the serial library's
+		// Write has no closed-check the way Read does, so worst case that
+		// write lands on a since-recycled fd. done is closed by the
+		// goroutine right before it returns, and the defer below blocks on
+		// it, so the goroutine is guaranteed to have exited before
+		// port.Close() runs.
+		stop, done := make(chan struct{}), make(chan struct{})
+		defer func() {
+			close(stop)
+			<-done
+		}()
 		go func() {
+			defer close(done)
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
@@ -256,19 +279,31 @@ func (d *daemon) run(device string) error {
 				case <-stop:
 					return
 				case now := <-ticker.C:
+					// Review item 2: fails/delta are computed and folded
+					// into d.samFailures while schedMu is still held (lock
+					// order schedMu→d.mu, matching the frame-driven site
+					// below), so the read-modify-write can't interleave
+					// with the other goroutine's and lose an update.
 					d.schedMu.Lock()
 					sched.Tick(now)
 					fails := sched.Failures()
-					d.schedMu.Unlock()
+					delta := fails - lastSchedFailures
+					lastSchedFailures = fails
 					d.mu.Lock()
-					d.samFailures = fails
+					d.samFailures += delta
 					d.mu.Unlock()
+					d.schedMu.Unlock()
 				}
 			}
 		}()
 	}
 
 	dec := bus.NewDecoder(port)
+	// lastResyncs mirrors lastSchedFailures for dec.Resyncs(): dec is also
+	// rebuilt fresh on every reconnect, so d.crcResyncs accumulates deltas
+	// across reconnects the same way (review item 3). Only the frame loop
+	// below touches dec or lastResyncs, so it needs no lock of its own.
+	var lastResyncs uint64
 	lastStats := time.Now()
 	for {
 		f, err := dec.Next()
@@ -286,7 +321,12 @@ func (d *daemon) run(device string) error {
 		d.frames++
 		d.framesWindow++
 		d.lastFrame = now
-		d.crcResyncs = uint64(dec.Resyncs())
+		// Running total across reconnects (review item 3): dec restarts its
+		// own Resyncs() counter at 0 on every run(), so fold in the delta
+		// since this run's last observation instead of overwriting.
+		curResyncs := uint64(dec.Resyncs())
+		d.crcResyncs += curResyncs - lastResyncs
+		lastResyncs = curResyncs
 		if !ok {
 			d.unknownFrames++
 		}
@@ -306,22 +346,33 @@ func (d *daemon) run(device string) error {
 			d.journal.NoteDevice(f.Src, now)
 		}
 		if sched != nil {
+			// Review items 2+3: same schedMu→d.mu nested order and
+			// delta-accumulation as the ticker goroutine above, so the two
+			// call sites can't race each other into a lost or regressed
+			// sam_failures update.
 			d.schedMu.Lock()
 			sched.NoteFrame(f, now)
 			sched.Tick(now) // between frames = the natural inter-frame gap
 			fails := sched.Failures()
-			d.schedMu.Unlock()
+			delta := fails - lastSchedFailures
+			lastSchedFailures = fails
 			d.mu.Lock()
-			d.samFailures = fails
+			d.samFailures += delta
 			d.mu.Unlock()
+			d.schedMu.Unlock()
 		}
 
 		if !d.verbose && time.Since(lastStats) >= time.Minute {
+			// Review item 6: snapshot under the lock, log after releasing it
+			// — log.Printf (I/O) has no business running while d.mu is held.
 			d.mu.Lock()
-			log.Printf("stats: %d frames this interval, %d unknown total, %d resync bytes",
-				d.framesWindow, d.unknownFrames, dec.Resyncs())
+			windowFrames := d.framesWindow
+			totalUnknown := d.unknownFrames
+			totalResyncs := d.crcResyncs
 			d.framesWindow = 0
 			d.mu.Unlock()
+			log.Printf("stats: %d frames this interval, %d unknown total, %d resync bytes",
+				windowFrames, totalUnknown, totalResyncs)
 			lastStats = time.Now()
 		}
 	}

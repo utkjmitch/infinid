@@ -144,7 +144,10 @@ var faultEpochUTC = time.Date(2013, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // DecodeFaults parses a 4202 fault-history reply: 10 entries × 7 bytes,
 // newest first; 70 or 72 byte payloads observed (entries at the tail — see
-// below). ok=false when f is not a 4202 reply or holds no entries.
+// below). ok=false when f fails the op/register/length shape guards — a
+// frame that passes them is a valid fault-table reply even when every slot
+// is empty (e.g. right after a panel fault reset), so ok=true there too;
+// callers distinguish "no faults" from "not decodable" via ok, not len(out).
 //
 // loc controls the zone the entry timestamps are assembled in; a nil loc
 // defaults to time.Local.
@@ -184,5 +187,5 @@ func DecodeFaults(f bus.Frame, loc *time.Location) ([]Fault, bool) {
 			Count:  int(e[6] & 0x7f),
 		})
 	}
-	return out, len(out) > 0
+	return out, true
 }

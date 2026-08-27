@@ -156,14 +156,41 @@ func TestFaultHistory4202(t *testing.T) {
 	if !faults[1].Active || faults[1].Count != 3 {
 		t.Errorf("entry 1 = %+v", faults[1])
 	}
-	// All-zero slots are skipped.
-	if _, ok := DecodeFaults(samFrame([]byte{0x00, 0x42, 0x02}, make([]byte, 70)), loc); ok {
-		t.Error("empty fault table must return ok=false")
-	}
 	// nil loc defaults to time.Local.
 	local, ok := DecodeFaults(samFrame([]byte{0x00, 0x42, 0x02}, p), nil)
 	if !ok || len(local) == 0 || local[0].Time.Location() != time.Local {
 		t.Errorf("nil loc did not default to time.Local: %+v", local)
+	}
+}
+
+// TestFaultHistory4202EmptyTable pins the panel-fault-reset path: a valid
+// 4202 reply (right register, right op, right length — same shape as the
+// TestFaultHistory4202 fixture above) whose 10 slots are all zeroed is a
+// real, decodable "no faults currently" reply, not an undecodable frame.
+// Before this fix DecodeFaults returned ok=len(out)>0, so this exact case
+// returned ok=false and NoteFaults's fault_history_wiped/manually_cleared
+// path (which needs an empty, ok=true slice to fire) was unreachable: a
+// homeowner pressing "reset faults" on the wall control left stale active
+// faults in the journal forever.
+func TestFaultHistory4202EmptyTable(t *testing.T) {
+	loc := time.UTC
+	p := make([]byte, 70) // same 70-byte entry-table shape, every slot zero
+	faults, ok := DecodeFaults(samFrame([]byte{0x00, 0x42, 0x02}, p), loc)
+	if !ok {
+		t.Fatal("valid-shape all-empty fault table must return ok=true")
+	}
+	if len(faults) != 0 {
+		t.Errorf("faults = %+v, want none", faults)
+	}
+
+	// Companion: guard failures must still return false even though the
+	// empty-but-valid case above now returns true — the fix only changes
+	// what happens after the guards pass.
+	if _, ok := DecodeFaults(samFrame([]byte{0x00, 0x42, 0x03}, p), loc); ok {
+		t.Error("wrong-register frame must return ok=false")
+	}
+	if _, ok := DecodeFaults(samFrame([]byte{0x00, 0x42, 0x02}, make([]byte, 69)), loc); ok {
+		t.Error("below-minimum-length frame must return ok=false")
 	}
 }
 
