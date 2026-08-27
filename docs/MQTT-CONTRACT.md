@@ -26,8 +26,9 @@ broker restart or retained-message wipe.
 | `sensor.infinid_discharge_temp` | 000302@ODU id 0x45 | °F |
 | `sensor.infinid_damper_<zone>` | 000319 per slot | % open (raw/15×100) |
 
-`<zone>` comes from the `zone_names` config (index-ordered slugs); unset
-indexes name themselves `zone_<n>`.
+`<zone>` comes from the zone-names config (index-ordered slugs; the
+`-zone-names` flag today, the add-on's `zone_names` option once the HAOS
+packaging lands); unset indexes name themselves `zone_<n>`.
 
 Zone-naming caveats:
 
@@ -45,12 +46,16 @@ Zone-naming caveats:
 ## Per-zone entities
 
 `sensor.infinid_zone_<zone>_{temp,humidity,cool_setpoint,heat_setpoint,fan_mode,hold,hold_permanent,hold_remaining}`
-— passive sources cover sensor-equipped zones; the wall control's own zone
-fills in only when SAM reads are enabled (`sam: true`). `hold` is the
-timed hold (00041F); `hold_permanent` is the SAM 3B03 bitmap — they are
-distinct signals and both publish. The SAM-sourced duplicates of passive
-fields (`*_sam`) are deliberately **not** published to MQTT; they exist on
-the REST surface for decode validation only.
+— all populated from passive decode of the wall control's own bus
+traffic. Enabling SAM reads (`-sam`) adds exactly one MQTT-published zone
+field: `hold_permanent` (the SAM 3B03 bitmap; `hold` is the timed hold
+from 00041F — distinct signals, both publish). Every other SAM-sourced
+zone value lands in `*_sam`-suffixed fields that are deliberately **not**
+published to MQTT; they exist on the REST surface for decode validation
+only, so passive and SAM decodes can be compared without duplicate HA
+entities. Open validation-phase question: if the wall control's own zone
+turns out to lack full passive coverage, publishing selected `_sam`
+fields for that zone alone is a candidate additive change.
 
 ## System / equipment (additive)
 
