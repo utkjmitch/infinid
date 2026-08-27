@@ -1,7 +1,7 @@
 name: infinid
-version: "0.1.1"
+version: "0.2.0"
 slug: infinid
-description: "Carrier Infinity ABCD bus daemon (read-only capture phase)"
+description: "Carrier Infinity ABCD bus daemon — local decode + MQTT discovery (read-only)"
 arch:
   - aarch64
 startup: services
@@ -9,3 +9,25 @@ boot: auto
 uart: true
 map:
   - share:rw
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: "REST debug/export (read-only, UNAUTHENTICATED — blank the host port here to keep it container-internal; never port-forward it)"
+options:
+  serial: "/dev/serial/by-id/CHANGE-ME"
+  mqtt_broker: ""
+  mqtt_user: ""
+  mqtt_password: ""
+  zone_names: ""
+  sam_reads: false
+  capture: true
+  capture_max_mb: 1024
+schema:
+  serial: str
+  mqtt_broker: str
+  mqtt_user: str
+  mqtt_password: password
+  zone_names: str
+  sam_reads: bool
+  capture: bool
+  capture_max_mb: int
