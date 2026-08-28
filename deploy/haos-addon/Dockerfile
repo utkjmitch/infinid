@@ -1,6 +1,6 @@
 FROM golang:1.25-alpine AS build
 RUN apk add --no-cache git
-ARG INFINID_REF=7d51c52a2fedd660caf24b067579ee6b11a88de3
+ARG INFINID_REF=99cbedbeb99fb6597879c52c4408487233cfc45f
 RUN git clone https://github.com/utkjmitch/infinid.git /src \
  && cd /src && git checkout "$INFINID_REF" \
  && CGO_ENABLED=0 go build -o /infinid ./cmd/infinid
