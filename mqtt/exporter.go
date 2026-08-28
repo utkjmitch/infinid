@@ -154,6 +154,29 @@ func (e *Exporter) publishConfig(def entityDef, object string, device map[string
 // an earlier snapshot but absent from this one (a timed hold clearing, a
 // mask-retracted zone) is actively retracted to "None" rather than left
 // frozen at its last retained value.
+//
+// Beat convergence: the produced/last retraction pass below only reaches
+// topics this Exporter remembers publishing — e.last, which starts empty on
+// construction and is wiped by Reassert. A field that vanished from state
+// while the exporter's memory was reset (a daemon restart, a reconnect)
+// would otherwise never be touched again, leaving its last retained broker
+// value frozen forever regardless of what the snapshot now says. So on a
+// beat (including the always-a-beat first call after New/Reassert, since
+// lastBeat is zero), this walks every sysEntities def and, for each zone
+// present in the snapshot, every zoneEntities def — not just the fields
+// actually present — publishing "None" for any def whose field is absent.
+// That "None" goes through publishField's own last-payload map with
+// beat=false, so it only sends once: repeated beats with the field still
+// absent stay quiet, exactly like every other change-detected publish. Zones
+// absent from the snapshot entirely are left untouched (no topics invented
+// for a zone that doesn't exist), and a zone that vanished entirely while
+// the daemon was down staying frozen at its last value is an accepted
+// residual — see docs/MQTT-CONTRACT.md's Staleness section.
+//
+// Side effect kept deliberately: a sys field that has never once been seen
+// (e.g. a SAM-only field on a passive-only install) now publishes "None" on
+// the very first beat — honest Unknown instead of publishing nothing at
+// all.
 func (e *Exporter) PublishState(snap state.Snapshot, now time.Time) {
 	beat := now.Sub(e.lastBeat) >= heartbeat
 	if beat {
@@ -163,17 +186,33 @@ func (e *Exporter) PublishState(snap state.Snapshot, now time.Time) {
 	for _, def := range sysEntities {
 		if f, ok := snap.Sys[def.field]; ok {
 			produced[e.publishField(def, def.object, f, beat)] = true
+		} else if beat {
+			produced[e.publishAbsentField(def, def.object)] = true
 		}
 	}
 	for z, zf := range snap.Zones {
 		for _, def := range zoneEntities {
+			object := fmt.Sprintf(def.object, e.zoneName(z))
 			if f, ok := zf[def.field]; ok {
-				produced[e.publishField(def, fmt.Sprintf(def.object, e.zoneName(z)), f, beat)] = true
+				produced[e.publishField(def, object, f, beat)] = true
+			} else if beat {
+				produced[e.publishAbsentField(def, object)] = true
 			}
 		}
 	}
 	for topic := range e.last {
 		if produced[topic] {
+			continue
+		}
+		if e.last[topic] == "None" {
+			// Already converged to None — by this same pass on an earlier
+			// cycle, by a beat's absent-field convergence above, or by the
+			// retraction send below on some prior call. Leave it recorded
+			// rather than deleting it: deleting here would erase the
+			// change-detection memory that keeps the next beat's
+			// publishAbsentField call quiet, turning "repeat beats don't
+			// spam" into "spam every heartbeat forever" for any field that
+			// stays absent indefinitely.
 			continue
 		}
 		// Retraction, not a normal publish: only drop the last-payload
@@ -183,6 +222,16 @@ func (e *Exporter) PublishState(snap state.Snapshot, now time.Time) {
 			delete(e.last, topic)
 		}
 	}
+}
+
+// publishAbsentField records a synthetic "None" for a def whose field is
+// absent from this snapshot. It always calls publishField with beat=false
+// — even when PublishState itself is on a beat — so the send goes through
+// ordinary change-detection: the first observed absence publishes "None"
+// and records it in e.last, and every subsequent beat with the field still
+// absent finds e.last already equal to "None" and stays quiet.
+func (e *Exporter) publishAbsentField(def entityDef, object string) string {
+	return e.publishField(def, object, state.Field{Stale: true}, false)
 }
 
 func (e *Exporter) publishField(def entityDef, object string, f state.Field, beat bool) string {

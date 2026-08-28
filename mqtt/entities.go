@@ -92,7 +92,7 @@ var zoneEntities = []entityDef{
 // Exporter.lastHealth doc comment in exporter.go).
 var healthEntities = []entityDef{
 	{field: "last_fault", object: "last_fault", name: "Last fault", text: true},
-	{field: "fault_count", object: "fault_count", name: "Fault count", stateClass: "total_increasing"},
+	{field: "fault_count", object: "fault_count", name: "Fault count", stateClass: "measurement"},
 	{field: "frames_per_min", object: "frames_per_min", name: "Bus frames/min", stateClass: "measurement"},
 	{field: "unknown_frames", object: "unknown_frames", name: "Unknown frames", stateClass: "total_increasing"},
 	{field: "sam_failures", object: "sam_failures", name: "SAM read failures", stateClass: "total_increasing"},

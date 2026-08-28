@@ -18,7 +18,10 @@ until it's actually confirmed.
    time you did it. Bus writes lag the labeled action, not the other way
    around: expect the first related write roughly 13-21 seconds after your
    timestamp, with downstream effects (dependent registers, feedback)
-   continuing to show up out to around 40 seconds. Sub-second precision
+   continuing to show up out to around 40 seconds (slower feedback, e.g.
+   airflow, can trail by ~80 s — see the labeled-session offsets in
+   [experiments/2026-08-12-labeled-session.md](../experiments/2026-08-12-labeled-session.md)).
+   Sub-second precision
    doesn't matter; getting the direction right does — look forward from
    your timestamp, and do write down which clock (and which timezone)
    you're using.

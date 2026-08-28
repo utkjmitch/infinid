@@ -13,9 +13,9 @@ default, so incoming bytes were split unpredictably between both readers.
 - Capture frame rate dropped from the system's normal ~1,500 frames/min to
   ~296 frames/min — the bus's own traffic didn't change; every other
   frame's bytes were simply going to the other process instead.
-- Resync bytes climbed continuously instead of settling: roughly
-  17,000/min sustained over the three days before it was caught, ~82
-  million bytes total.
+- Resync bytes climbed continuously instead of settling over the ~3.4-day
+  window (2026-08-24 reboot to 2026-08-27 catch, ~4,900 minutes): ~82
+  million bytes total, i.e. roughly 17,000/min sustained.
 - The wall control answered the impersonator's `3B02` reads with
   all-zero payloads — a live device serving zeros to a second, unexpected
   reader claiming the SAM's address.

@@ -10,9 +10,9 @@ uart: true
 map:
   - share:rw
 ports:
-  8099/tcp: 8099
+  8099/tcp: null
 ports_description:
-  8099/tcp: "REST debug/export (read-only, UNAUTHENTICATED — blank the host port here to keep it container-internal; never port-forward it)"
+  8099/tcp: "REST debug/export (read-only, UNAUTHENTICATED — container-internal by default; map a host port here only if you need LAN access, and never port-forward it)"
 options:
   serial: "/dev/serial/by-id/CHANGE-ME"
   mqtt_broker: ""

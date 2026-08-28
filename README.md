@@ -11,12 +11,15 @@ Linux machine near your equipment, this is for you.
 
 ## Status
 
-**v1 (in development): read-only.** Decodes zone temperatures/humidity/setpoints,
-damper positions, filter life, blower RPM/CFM, and outdoor-unit diagnostics from
-bus traffic, and publishes everything to Home Assistant via MQTT discovery.
-v1 has no write path at all — it cannot command your equipment. The only
-optional transmission (`-sam`, off by default) issues read requests and nothing
-else, and is physically unable to construct anything but reads.
+**v1 (in development): read-only.** Passively decodes zone
+temperatures/humidity/setpoints, damper positions, blower RPM/CFM, and
+outdoor-unit diagnostics from bus traffic, and publishes everything to Home
+Assistant via MQTT discovery. Fault history, filter life, and system mode
+are not on the passive bus at all — they require enabling SAM reads
+(`-sam`, off by default). v1 has no write path at all — it cannot command
+your equipment. The only optional transmission (`-sam`, off by default)
+issues read requests and nothing else, and is physically unable to
+construct anything but reads.
 
 v2 will add setpoint/mode writes via SAM emulation, gated on validated decode.
 

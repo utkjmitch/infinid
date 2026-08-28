@@ -61,8 +61,12 @@ fields for that zone alone is a candidate additive change.
 
 `sensor.infinid_{outdoor_temp,supply_air_temp,suction_temp,superheat,line_voltage,system_mode}`
 and `sensor.infinid_filter_life` (**remaining %** — the bus reports consumed %,
-inverted at the contract boundary; REST `/state` shows the raw used value)
-plus runtime counters
+inverted at the contract boundary; REST `/state` shows the raw used value).
+**`filter_life` and `system_mode` are SAM-sourced**: the wall control only
+serves accessory life (3B05) and system mode (3B02) over an active SAM
+read, never on the passive bus, so both populate only with SAM reads
+enabled (`-sam`, off by default) — on a passive default install they
+publish `None`, not a stale-but-present value. Plus runtime counters
 `sensor.infinid_{heat_stage1,heat_stage2,blower,cool}_{cycles,hours}` and
 `sensor.infinid_{idu,odu}_power_cycles` (state_class total_increasing —
 long-term statistics candidates). IDU (furnace) counters commit on a
@@ -80,7 +84,10 @@ counts live.
 daemon-lifetime running totals (they do not reset when the serial port
 reconnects). The three fault entities are only meaningful when the event
 journal is enabled (`-journal`); without it they read as no-faults, not
-as unknown.
+as unknown. They additionally need SAM reads enabled (`-sam`) to have any
+data to report at all — fault history (4202) is SAM-only, with no passive
+path — so on a passive default install (`-journal` on, `-sam` off) they
+read no-faults/`None` too, not unknown.
 
 The full event journal (fault lifecycle, outage classification, device
 liveness) is not an MQTT surface: `GET /events` on the REST port, or the
@@ -105,4 +112,11 @@ retracted the same way — its topic receives a retained `None` rather than
 freezing at the last value. Everything re-publishes on a 60 s heartbeat
 (state and health each keep their own heartbeat clock), and the daemon
 re-asserts all discovery + state after an MQTT reconnect, so a broker
-that loses its retained store converges within a minute.
+that loses its retained store converges within a minute — including
+fields that went absent while the daemon's own retraction memory was
+reset (a restart or reconnect), which the heartbeat now retracts to
+`None` on its first beat rather than leaving frozen at their last value.
+One residual is accepted: a zone that vanishes entirely while the daemon
+is down (not just a field within a still-present zone) stays frozen at
+its last retained values, since there is no live snapshot key to converge
+against once the daemon comes back.

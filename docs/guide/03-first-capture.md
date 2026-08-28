@@ -61,7 +61,7 @@ and remove it, not just stop it, if it's set to start on boot, or it will
 come back after the next restart and do this again. This is also a reason
 to keep transmission off by default: a second process that's actively
 writing to the bus — not just reading — can make the wall control log
-system-monitor communication faults, on top of corrupting your capture.
+a "system monitor alert" fault, on top of corrupting your capture.
 One device, one reader, and the passive default stays the safe choice
 until you have a specific reason to enable SAM reads. This isn't a
 hypothetical: see
@@ -77,11 +77,11 @@ Captured frames land in the file you named as one JSON object per line
 infinid exposes a read-only debug port at 8099 (`GET /state`, `GET
 /events`, and similar). It is read-only by design and will stay that way,
 but it is **unauthenticated** — fine to leave reachable on a trusted LAN,
-not fine to expose further. The two install paths default differently
-here: building from source binds the REST port to loopback only
+not fine to expose further. Both install paths default to container/host-
+local only: building from source binds the REST port to loopback only
 (`127.0.0.1:8099`), so it isn't reachable from your LAN unless you change
-the `-rest` flag yourself; the HAOS add-on binds it inside the container
-and maps that straight onto your LAN by default. If you're at all unsure
-about your network, disable the host port mapping in the add-on's Network
-panel so the port stays container-internal. Never port-forward it to the
+the `-rest` flag yourself; the HAOS add-on keeps the port container-internal
+by default too — it isn't mapped onto your LAN until you explicitly add a
+host port for it in the add-on's Network panel. Only do that if you need
+LAN access to the debug surface, and never port-forward it to the
 internet.

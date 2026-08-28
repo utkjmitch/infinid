@@ -205,6 +205,89 @@ func TestAbsentFieldRetraction(t *testing.T) {
 	}
 }
 
+// TestBeatConvergenceAfterRestart pins the fix for a field that vanished
+// from state while the exporter's own memory was reset (process restart):
+// a fresh Exporter's e.last is empty, so the old retraction pass — which
+// only iterates e.last — had nothing to retract, leaving the broker's
+// stale retained value (e.g. hold_remaining stuck at "45") frozen forever.
+// The first PublishState call after construction is always a beat (lastBeat
+// is zero), so beat convergence now covers every zone present in the
+// snapshot for every zoneEntities def, publishing "None" for defs whose
+// field is absent even though this exporter never saw the prior value.
+func TestBeatConvergenceAfterRestart(t *testing.T) {
+	p := newFake()
+	topic := "infinid/zone_bedrooms_hold_remaining/state"
+
+	// "Before restart": hold_remaining_min=45 lands on the broker, retained.
+	e1 := New(p, testConfig())
+	before := snapWith(nil, map[int]map[string]state.Field{
+		1: {"hold_remaining_min": {Value: 45, TS: t0}},
+	})
+	e1.PublishState(before, t0)
+	if got := p.msgs[topic]; len(got) != 1 || got[0] != "45" {
+		t.Fatalf("pre-restart payload = %v, want [45]", got)
+	}
+
+	// "After restart": a brand-new Exporter (fresh e.last/e.discovered/
+	// lastBeat) against the same broker (same fake publisher, so its
+	// history/retained state persists). Zone 1 is present but the field is
+	// gone.
+	e2 := New(p, testConfig())
+	after := snapWith(nil, map[int]map[string]state.Field{1: {}})
+	e2.PublishState(after, t0.Add(time.Hour))
+	got := p.msgs[topic]
+	if len(got) == 0 || got[len(got)-1] != "None" {
+		t.Fatalf("post-restart latest payload = %v, want last entry None", got)
+	}
+}
+
+// TestBeatConvergenceAfterReassert is TestBeatConvergenceAfterRestart's
+// sibling via the Reassert reconnect seam instead of reconstruction: the
+// same exporter instance, but Reassert clears e.last/lastBeat exactly as a
+// fresh construction would, so the next PublishState call is a beat and
+// must converge an absent field to "None" the same way.
+func TestBeatConvergenceAfterReassert(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	topic := "infinid/zone_bedrooms_hold_remaining/state"
+
+	withHold := snapWith(nil, map[int]map[string]state.Field{
+		1: {"hold_remaining_min": {Value: 45, TS: t0}},
+	})
+	e.PublishState(withHold, t0)
+	if got := p.msgs[topic]; len(got) != 1 || got[0] != "45" {
+		t.Fatalf("initial payload = %v, want [45]", got)
+	}
+
+	e.Reassert()
+
+	withoutHold := snapWith(nil, map[int]map[string]state.Field{1: {}})
+	e.PublishState(withoutHold, t0.Add(time.Second))
+	got := p.msgs[topic]
+	if len(got) == 0 || got[len(got)-1] != "None" {
+		t.Fatalf("post-Reassert latest payload = %v, want last entry None", got)
+	}
+}
+
+// TestBeatConvergenceIdempotent pins that repeated beats with a field still
+// absent send "None" exactly once — beat convergence must go through the
+// same last-payload change-detection map as everything else, or a
+// chronically-absent field (e.g. a SAM-only field on a passive install)
+// would resend "None" every heartbeat forever.
+func TestBeatConvergenceIdempotent(t *testing.T) {
+	p := newFake()
+	e := New(p, testConfig())
+	topic := "infinid/zone_bedrooms_hold_remaining/state"
+	snap := snapWith(nil, map[int]map[string]state.Field{1: {}})
+
+	e.PublishState(snap, t0)                     // first call ever: beat
+	e.PublishState(snap, t0.Add(60*time.Second)) // heartbeat boundary: beat again
+	got := p.msgs[topic]
+	if len(got) != 1 || got[0] != "None" {
+		t.Fatalf("payload history = %v, want exactly one None across two beats", got)
+	}
+}
+
 // TestFloatFormattingTransforms pins fixed-precision formatting for
 // float32-sourced fields that otherwise emit 17-digit garbage
 // (0.3499999940395355, 412.70001220703125, 3.3333333333333335).

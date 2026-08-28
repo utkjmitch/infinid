@@ -31,8 +31,11 @@ Once a tap is in place and the daemon is running, you get three things: a
 set of Home Assistant entities discovered automatically over MQTT (zone
 temperatures, setpoints, damper positions, blower and compressor telemetry,
 runtime counters, fault status — the full list is in
-[MQTT-CONTRACT.md](../MQTT-CONTRACT.md)), an event journal recording fault
-history and equipment liveness over time, and a decode workbench —
+[MQTT-CONTRACT.md](../MQTT-CONTRACT.md); note that fault status, filter
+life, and system mode come only from SAM reads, so they need `-sam`
+enabled — passive-only installs read them as no-faults/unknown, not as
+live data), an event journal recording fault history and equipment
+liveness over time, and a decode workbench —
 `businspect`, a small set of command-line lenses over your own captured
 traffic — for pushing the verified register map further on your equipment.
 

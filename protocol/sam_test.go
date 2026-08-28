@@ -246,4 +246,17 @@ func TestSAMMalformedInput(t *testing.T) {
 			t.Error("wrong-register frame must return ok=false")
 		}
 	})
+	t.Run("4202-shaped ACK06 from a non-wall-control src", func(t *testing.T) {
+		// Same register/op/length shape as a real fault-history reply, but
+		// from a different bus address — must not be treated as an owned
+		// SAM reply, matching the sibling dispatch guard in protocol.go's
+		// 0x004202 case (owner == bus.DevWallControl).
+		p := make([]byte, 70)
+		copy(p[0:7], []byte{171, 0x20, 9, 16, 0x13, 0x5c, 0x81})
+		f := bus.Frame{Src: bus.DevHeatPump, Dst: bus.DevSAM, Op: bus.OpAck06,
+			Data: append([]byte{0x00, 0x42, 0x02}, p...)}
+		if _, ok := DecodeFaults(f, time.UTC); ok {
+			t.Error("non-wall-control src must return ok=false")
+		}
+	})
 }

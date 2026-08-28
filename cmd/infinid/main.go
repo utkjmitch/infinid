@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -461,7 +462,10 @@ func (d *daemon) publishLoop() {
 
 		if lastCount.IsZero() || now.Sub(lastCount) >= time.Minute {
 			if !lastCount.IsZero() {
-				fpm = float64(frames-lastFrames) / now.Sub(lastCount).Minutes()
+				// Rounded to a whole number: frames_per_min is a count-like
+				// rate, and math.Round keeps it publishing "1500" instead of
+				// float64 division artifacts like "1499.9683544303797".
+				fpm = math.Round(float64(frames-lastFrames) / now.Sub(lastCount).Minutes())
 			}
 			lastFrames, lastCount = frames, now
 		}

@@ -155,7 +155,7 @@ func DecodeFaults(f bus.Frame, loc *time.Location) ([]Fault, bool) {
 	if loc == nil {
 		loc = time.Local
 	}
-	if f.Op != bus.OpAck06 || len(f.Data) < 3+70 {
+	if f.Src != bus.DevWallControl || f.Op != bus.OpAck06 || len(f.Data) < 3+70 {
 		return nil, false
 	}
 	if f.Data[0] != 0x00 || f.Data[1] != 0x42 || f.Data[2] != 0x02 {
