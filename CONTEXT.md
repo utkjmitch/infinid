@@ -29,6 +29,12 @@ An active read-only register request the daemon sends as source address 0x92,
 mimicking Carrier's discontinued System Access Module.
 _Avoid_: poll (too generic), write (never)
 
+**Write Baseline**:
+The complete passive-observed snapshot of zone state a write payload is composed
+from. A SAM read-back is never a baseline source — a register that echoes zeros
+cannot anchor a write.
+_Avoid_: read-modify-write, last read
+
 **Verified Register**:
 A register whose byte layout was confirmed against ground truth in a dated
 verification section of `docs/protocol-tables.md`; the only kind that gets a typed
@@ -47,6 +53,8 @@ later analysis, never an error.
   transmits.
 - A register moves from **Archive-Unknown** handling to a decoder only by becoming
   a **Verified Register**.
+- A write is composed only from a **Write Baseline**, whose only source is
+  **Passive Snoop**.
 
 ## Example dialogue
 

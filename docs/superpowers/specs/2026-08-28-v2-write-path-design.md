@@ -57,7 +57,7 @@ humidifier/ventilator control; multi-SAM coordination; non-Carrier systems.
 | `cmd/infinid` | wire command topics → validate → `samctl` → bus | New `-write` flag (default off), layered on `-sam`. |
 
 Command flow: `MQTT command topic → mqtt (parse) → state (validate against
-current snapshot) → samctl (encode, clamp, RMW) → bus`. Writes never flow
+current snapshot) → samctl (encode, clamp, compose-from-Write-Baseline) → bus`. Writes never flow
 through REST — REST stays read-only forever (the v1 invariant that makes the
 unauthenticated debug port acceptable).
 
@@ -68,11 +68,18 @@ Every one of these is enforced in code, not documentation:
 1. **Register allowlist.** A closed set, 3B03-only at first. `samctl` cannot
    encode a write to any register not on the list — the allowlist is the
    input to the encoder, not a check the caller may skip.
-2. **Read-modify-write, mandatory.** A write takes the *most recent decoded
-   3B03 frame* (from the read scheduler), mutates only the target zone's
-   bytes, and re-emits. `samctl` has no path that constructs a register
-   payload from zero. If no recent 3B03 has been observed, the write is
-   refused (no baseline = no write).
+2. **Write Baseline, mandatory.** A write composes the full 3B03 payload
+   from the current passive-observed state of every zone (the `00041x`
+   registers v1 already decodes), changing only the target zone's target
+   field. 3B03 read-back is explicitly **disqualified** as a baseline
+   source: on this unit it reads all-zero (see Evidence), so "RMW against
+   the last read" would construct the payload from zeros — the exact
+   failure this rail exists to prevent. If any zone's observed state is
+   stale or unknown, the write is refused — no complete observed picture,
+   no write. Stage-2 dry-run must additionally confirm the composed
+   payload's *unchanged-zone* bytes match SAM prior art
+   (infinitive/InfinitESP) before first transmission. (Glossary: **Write
+   Baseline** in CONTEXT.md, resolved 2026-09-11.)
 3. **Value clamps.** Setpoints bounded to a sane envelope (**55–90 °F**,
    heat < cool with a minimum deadband); mode/fan ∈ the known decoded enums.
    Out-of-range commands are rejected with a logged reason, never clamped
@@ -138,9 +145,10 @@ section marked v2.
 
 - **`samctl` safety sweep** (mirrors the Task 7 OpRead sweep): a seeded run
   over many commands asserting every emitted frame is (a) op-write, (b) to an
-  allowlisted register, (c) a mutation of a real prior read (never
-  zero-constructed), (d) within clamps. Mutation-tested — inject a rogue
-  out-of-allowlist or zero-baseline write and prove the sweep catches it.
+  allowlisted register, (c) composed from a complete, fresh Write Baseline
+  (never from a zero, stale, or partial picture), (d) within clamps.
+  Mutation-tested — inject a rogue out-of-allowlist write, or one composed
+  with a missing/stale zone, and prove the sweep catches it.
 - **Round-trip encode/decode**: a value written then decoded returns the
   input (property test), against real 3B03 bytes once captured.
 - **Clamp/reject tests**: out-of-range setpoints, heat≥cool, missing
